@@ -1,0 +1,20 @@
+# Dockerfile for the In-VM Agent (simulates the agent running inside a MicroVM)
+FROM golang:1.22-alpine AS builder
+
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 go build -o /vm-agent ./cmd/vm-agent
+
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates bash curl git
+
+# Create workspace directory
+RUN mkdir -p /workspace
+
+COPY --from=builder /vm-agent /usr/local/bin/vm-agent
+
+EXPOSE 9090
+CMD ["vm-agent"]

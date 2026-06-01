@@ -1,0 +1,16 @@
+# Dockerfile for the Sandbox API Server (management plane)
+FROM golang:1.22-alpine AS builder
+
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 go build -o /sandbox-api ./cmd/sandbox-api
+
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates
+COPY --from=builder /sandbox-api /usr/local/bin/sandbox-api
+
+EXPOSE 8080
+CMD ["sandbox-api"]

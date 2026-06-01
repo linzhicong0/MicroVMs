@@ -1,0 +1,93 @@
+# Docker Compose demo — simulates the Firecracker sandbox architecture
+# using containers instead of MicroVMs (for development/testing without KVM).
+#
+# This demonstrates:
+# - Management plane (sandbox-api) managing multiple "VMs"
+# - In-VM agents running in separate containers
+# - Shared network bridge for inter-VM communication
+# - Port forwarding/proxy
+
+version: "3.8"
+
+networks:
+  sandbox-bridge:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.0.0.0/24
+          gateway: 10.0.0.1
+
+services:
+  # ── Management Plane ────────────────────────────────
+  sandbox-api:
+    build:
+      context: ../
+      dockerfile: demo/Dockerfile.api
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - BASE_DOMAIN=sandbox.localhost
+      - SNAPSHOT_DIR=/data/snapshots
+    volumes:
+      - snapshot-data:/data/snapshots
+    networks:
+      sandbox-bridge:
+        ipv4_address: 10.0.0.1
+
+  # ── Simulated MicroVM: Node.js ────────────────────────────
+  vm-node:
+    build:
+      context: ../
+      dockerfile: demo/Dockerfile.agent
+    environment:
+      - AGENT_PORT=9090
+      - WORK_DIR=/workspace
+      - LANGUAGE=node
+    volumes:
+      - node-workspace:/workspace
+    networks:
+      sandbox-bridge:
+        ipv4_address: 10.0.0.2
+    depends_on:
+      - sandbox-api
+
+  # ── Simulated MicroVM: Python ────────────────────────────
+  vm-python:
+    build:
+      context: ../
+      dockerfile: demo/Dockerfile.agent
+    environment:
+      - AGENT_PORT=9090
+      - WORK_DIR=/workspace
+      - LANGUAGE=python
+    volumes:
+      - python-workspace:/workspace
+    networks:
+      sandbox-bridge:
+        ipv4_address: 10.0.0.3
+    depends_on:
+      - sandbox-api
+
+  # ── Simulated MicroVM: Java ────────────────────────────
+  vm-java:
+    build:
+      context: ../
+      dockerfile: demo/Dockerfile.agent
+    environment:
+      - AGENT_PORT=9090
+      - WORK_DIR=/workspace
+      - LANGUAGE=java
+    volumes:
+      - java-workspace:/workspace
+    networks:
+      sandbox-bridge:
+        ipv4_address: 10.0.0.4
+    depends_on:
+      - sandbox-api
+
+volumes:
+  snapshot-data:
+  node-workspace:
+  python-workspace:
+  java-workspace:

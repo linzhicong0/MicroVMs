@@ -1,0 +1,15 @@
+{
+  "name": "@microvms/sandbox-client",
+  "version": "0.1.0",
+  "description": "TypeScript client for the Firecracker Sandbox API (Open-Agents compatible)",
+  "main": "dist/sandbox.js",
+  "types": "dist/sandbox.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "demo": "npx tsx demo.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "tsx": "^4.7.0"
+  }
+}
