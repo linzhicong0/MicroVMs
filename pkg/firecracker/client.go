@@ -179,8 +179,14 @@ func (c *Client) put(ctx context.Context, path string, body interface{}) error {
 
 	if resp.StatusCode >= 400 {
 		var errResp map[string]string
-		json.NewDecoder(resp.Body).Decode(&errResp)
-		return fmt.Errorf("firecracker API error %d: %s", resp.StatusCode, errResp["fault_message"])
+		if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
+			return fmt.Errorf("firecracker API error %d (could not decode response)", resp.StatusCode)
+		}
+		msg := errResp["fault_message"]
+		if msg == "" {
+			msg = "unknown error"
+		}
+		return fmt.Errorf("firecracker API error %d: %s", resp.StatusCode, msg)
 	}
 
 	return nil

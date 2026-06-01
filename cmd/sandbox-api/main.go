@@ -180,7 +180,10 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 
 	// Create workspace directory (simulates workspace block device)
 	workDir := fmt.Sprintf("/tmp/sandbox-workspaces/%s", sandboxID)
-	os.MkdirAll(workDir, 0755)
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		httpError(w, http.StatusInternalServerError, "create workspace: %v", err)
+		return
+	}
 
 	instance := &SandboxInstance{
 		ID:           sandboxID,
@@ -325,7 +328,10 @@ func (s *Server) handleWriteFile(w http.ResponseWriter, r *http.Request) {
 
 	// In production: forward to in-VM agent via vsock
 	fullPath := fmt.Sprintf("%s/%s", sb.WorkDir, path)
-	os.MkdirAll(fmt.Sprintf("%s/%s", sb.WorkDir, dirOf(path)), 0755)
+	if err := os.MkdirAll(fmt.Sprintf("%s/%s", sb.WorkDir, dirOf(path)), 0755); err != nil {
+		httpError(w, http.StatusInternalServerError, "create parent dir: %v", err)
+		return
+	}
 
 	if err := os.WriteFile(fullPath, []byte(req.Content), 0644); err != nil {
 		httpError(w, http.StatusInternalServerError, "write file: %v", err)

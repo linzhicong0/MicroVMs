@@ -107,8 +107,12 @@ func (a *Agent) handleExec(w http.ResponseWriter, r *http.Request) {
 		cwd = a.workDir
 	}
 
-	// Execute the command
-	cmd := exec.Command("sh", "-c", req.Cmd)
+	// Execute the command.
+	// NOTE: This is intentionally executing user-provided commands — the VM agent
+	// runs inside an isolated Firecracker MicroVM with its own kernel, so command
+	// execution is the core purpose of this service. The isolation boundary is the
+	// MicroVM itself, not input validation. #nosec
+	cmd := exec.Command("sh", "-c", req.Cmd) //nolint:gosec
 	cmd.Dir = cwd
 
 	// Set environment
@@ -163,7 +167,10 @@ func (a *Agent) handleWriteFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Ensure parent directory exists
-	os.MkdirAll(filepath.Dir(path), 0755)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		httpError(w, http.StatusInternalServerError, "create parent dir: %v", err)
+		return
+	}
 
 	mode := os.FileMode(0644)
 	if req.Mode != 0 {
