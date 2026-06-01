@@ -1,0 +1,1433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Firecracker Sandbox — Architecture Design</title>
+  <style>
+    /* ── Reset & Tokens ───────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0d1117;
+      --surface:   #161b22;
+      --surface2:  #1c2333;
+      --border:    #30363d;
+      --accent:    #f78166;
+      --accent2:   #56d364;
+      --accent3:   #79c0ff;
+      --accent4:   #d2a8ff;
+      --accent5:   #ffa657;
+      --accent6:   #39d353;
+      --text:      #e6edf3;
+      --muted:     #8b949e;
+      --radius:    10px;
+      --shadow:    0 4px 24px rgba(0,0,0,.55);
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      line-height: 1.65;
+      min-height: 100vh;
+    }
+
+    /* ── Hero ─────────────────────────────────────────────────────── */
+    .hero {
+      background: linear-gradient(135deg, #0d1117 0%, #1a1f2e 50%, #0d1117 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 80px 24px 64px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .hero::before {
+      content: '';
+      position: absolute; inset: 0;
+      background: radial-gradient(ellipse 70% 50% at 50% 0%, rgba(121,192,255,.12) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(121,192,255,.12);
+      border: 1px solid rgba(121,192,255,.3);
+      border-radius: 20px;
+      padding: 4px 14px;
+      font-size: .75rem;
+      color: var(--accent3);
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      margin-bottom: 20px;
+    }
+    .hero h1 {
+      font-size: clamp(2rem, 5vw, 3.4rem);
+      font-weight: 700;
+      letter-spacing: -.03em;
+      background: linear-gradient(135deg, var(--text) 30%, var(--accent3));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 16px;
+    }
+    .hero p {
+      max-width: 620px;
+      margin: 0 auto;
+      color: var(--muted);
+      font-size: 1.05rem;
+    }
+
+    /* ── Layout ───────────────────────────────────────────────────── */
+    .container { max-width: 1160px; margin: 0 auto; padding: 0 24px; }
+
+    section { padding: 64px 0; border-bottom: 1px solid var(--border); }
+    section:last-child { border-bottom: none; }
+
+    .section-label {
+      font-size: .7rem;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--accent3);
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    h2 {
+      font-size: 1.9rem;
+      font-weight: 700;
+      letter-spacing: -.02em;
+      margin-bottom: 10px;
+    }
+    .section-desc {
+      color: var(--muted);
+      max-width: 680px;
+      margin-bottom: 40px;
+    }
+
+    /* ── Cards ────────────────────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px;
+      box-shadow: var(--shadow);
+      transition: border-color .2s, transform .2s;
+    }
+    .card:hover { border-color: var(--accent3); transform: translateY(-2px); }
+
+    .grid { display: grid; gap: 20px; }
+    .grid-2 { grid-template-columns: repeat(auto-fill, minmax(480px, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+    .grid-4 { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+
+    /* ── Architecture Diagram ──────────────────────────────────────── */
+    .arch-diagram {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 40px 32px;
+      overflow-x: auto;
+    }
+    .arch-row {
+      display: flex;
+      align-items: stretch;
+      gap: 12px;
+      margin-bottom: 16px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .arch-box {
+      border-radius: 8px;
+      padding: 14px 20px;
+      font-size: .85rem;
+      font-weight: 600;
+      text-align: center;
+      min-width: 130px;
+      border: 1.5px solid;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+    .arch-box .icon { font-size: 1.4rem; }
+
+    .box-blue   { background: rgba(121,192,255,.1); border-color: rgba(121,192,255,.4); color: var(--accent3); }
+    .box-green  { background: rgba(86,211,100,.1);  border-color: rgba(86,211,100,.4);  color: var(--accent2); }
+    .box-orange { background: rgba(255,166,87,.1);  border-color: rgba(255,166,87,.4);  color: var(--accent5); }
+    .box-purple { background: rgba(210,168,255,.1); border-color: rgba(210,168,255,.4); color: var(--accent4); }
+    .box-red    { background: rgba(247,129,102,.1); border-color: rgba(247,129,102,.4); color: var(--accent); }
+    .box-teal   { background: rgba(57,211,83,.1);   border-color: rgba(57,211,83,.4);   color: var(--accent6); }
+
+    .arch-arrow {
+      text-align: center;
+      color: var(--muted);
+      font-size: 1.3rem;
+      margin: 4px 0;
+    }
+    .arch-group-label {
+      text-align: center;
+      font-size: .7rem;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+    .arch-dashed-group {
+      border: 1.5px dashed var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+
+    /* ── Comparison Table ─────────────────────────────────────────── */
+    .table-wrap { overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: .88rem;
+    }
+    thead th {
+      padding: 12px 16px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      text-align: left;
+      font-weight: 600;
+      color: var(--text);
+    }
+    tbody td {
+      padding: 11px 16px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      vertical-align: top;
+    }
+    tbody tr:hover td { background: rgba(255,255,255,.02); }
+    .badge {
+      display: inline-block;
+      padding: 2px 9px;
+      border-radius: 20px;
+      font-size: .72rem;
+      font-weight: 600;
+      letter-spacing: .04em;
+    }
+    .badge-green  { background: rgba(86,211,100,.15); color: var(--accent2); border: 1px solid rgba(86,211,100,.3); }
+    .badge-orange { background: rgba(255,166,87,.15); color: var(--accent5); border: 1px solid rgba(255,166,87,.3); }
+    .badge-blue   { background: rgba(121,192,255,.15); color: var(--accent3); border: 1px solid rgba(121,192,255,.3); }
+    .badge-purple { background: rgba(210,168,255,.15); color: var(--accent4); border: 1px solid rgba(210,168,255,.3); }
+
+    /* ── Feature Pills ────────────────────────────────────────────── */
+    .pill-group { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    .pill {
+      padding: 5px 13px;
+      border-radius: 20px;
+      font-size: .78rem;
+      font-weight: 500;
+      border: 1px solid;
+    }
+    .pill-blue   { background: rgba(121,192,255,.08); border-color: rgba(121,192,255,.25); color: var(--accent3); }
+    .pill-green  { background: rgba(86,211,100,.08);  border-color: rgba(86,211,100,.25);  color: var(--accent2); }
+    .pill-orange { background: rgba(255,166,87,.08);  border-color: rgba(255,166,87,.25);  color: var(--accent5); }
+    .pill-purple { background: rgba(210,168,255,.08); border-color: rgba(210,168,255,.25); color: var(--accent4); }
+    .pill-red    { background: rgba(247,129,102,.08); border-color: rgba(247,129,102,.25); color: var(--accent); }
+
+    /* ── Code Block ───────────────────────────────────────────────── */
+    pre {
+      background: #0a0e14;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 18px 20px;
+      overflow-x: auto;
+      font-size: .82rem;
+      line-height: 1.7;
+      color: #c9d1d9;
+      margin: 14px 0;
+    }
+    .kw  { color: #ff7b72; }
+    .str { color: #a5d6ff; }
+    .cm  { color: #6e7681; font-style: italic; }
+    .fn  { color: #d2a8ff; }
+    .num { color: #f2cc60; }
+    .type{ color: #79c0ff; }
+    .attr{ color: #ffa657; }
+
+    /* ── Timeline / Flow Steps ────────────────────────────────────── */
+    .flow {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      position: relative;
+      padding-left: 36px;
+    }
+    .flow::before {
+      content: '';
+      position: absolute;
+      left: 11px; top: 0; bottom: 0;
+      width: 2px;
+      background: linear-gradient(to bottom, var(--accent3), var(--accent4), var(--accent5));
+    }
+    .flow-step {
+      position: relative;
+      padding: 0 0 28px 0;
+    }
+    .flow-step::before {
+      content: '';
+      position: absolute;
+      left: -29px;
+      top: 6px;
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      background: var(--accent3);
+      border: 2px solid var(--bg);
+    }
+    .flow-step h4 { font-size: .95rem; font-weight: 600; margin-bottom: 5px; }
+    .flow-step p  { color: var(--muted); font-size: .86rem; }
+
+    /* ── Network Diagram ──────────────────────────────────────────── */
+    .net-diagram {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr auto 1fr;
+      gap: 8px;
+      align-items: center;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 32px;
+      overflow-x: auto;
+    }
+    .net-node {
+      background: var(--surface2);
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+      text-align: center;
+      font-size: .82rem;
+      font-weight: 600;
+    }
+    .net-arrow { font-size: 1.6rem; color: var(--muted); text-align: center; }
+
+    /* ── Warning / Info Callout ───────────────────────────────────── */
+    .callout {
+      border-radius: 8px;
+      padding: 16px 20px;
+      font-size: .88rem;
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      margin: 20px 0;
+    }
+    .callout-icon { font-size: 1.2rem; flex-shrink: 0; margin-top: 1px; }
+    .callout-green  { background: rgba(86,211,100,.08);  border: 1px solid rgba(86,211,100,.25); }
+    .callout-blue   { background: rgba(121,192,255,.08); border: 1px solid rgba(121,192,255,.25); }
+    .callout-orange { background: rgba(255,166,87,.08);  border: 1px solid rgba(255,166,87,.25); }
+
+    /* ── Footer ───────────────────────────────────────────────────── */
+    footer {
+      text-align: center;
+      padding: 32px 24px;
+      color: var(--muted);
+      font-size: .82rem;
+      border-top: 1px solid var(--border);
+    }
+
+    /* ── Scrollbar ────────────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    @media (max-width: 640px) {
+      .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+      .net-diagram { grid-template-columns: 1fr; }
+      .net-arrow { transform: rotate(90deg); }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── HERO ──────────────────────────────────────────────────────── -->
+<div class="hero">
+  <div class="hero-badge">🔥 Architecture Design</div>
+  <h1>Firecracker Sandbox for Open Agents</h1>
+  <p>Replace the Vercel cloud sandbox with a self-hosted, polyglot, microservice-capable MicroVM platform powered by AWS Firecracker.</p>
+</div>
+
+<!-- ── 1. HOW OPEN-AGENTS WORKS TODAY ──────────────────────────── -->
+<section>
+  <div class="container">
+    <p class="section-label">Section 01</p>
+    <h2>How Open-Agents Connects to Its Sandbox Today</h2>
+    <p class="section-desc">
+      Open-Agents uses a three-layer design: Web → Agent Workflow → Sandbox VM. The agent runs <em>outside</em> the VM and talks to it via a typed interface.
+    </p>
+
+    <!-- Architecture flow -->
+    <div class="arch-diagram">
+      <p class="arch-group-label">Open-Agents Current Architecture</p>
+
+      <div class="arch-dashed-group">
+        <p class="arch-group-label">Vercel Edge / Next.js App</p>
+        <div class="arch-row">
+          <div class="arch-box box-blue"><span class="icon">🌐</span>Web UI<br/>(Next.js)</div>
+          <div class="arch-box box-blue"><span class="icon">💬</span>Chat API<br/>Route</div>
+          <div class="arch-box box-blue"><span class="icon">🔄</span>Workflow SDK<br/>(Durable Run)</div>
+        </div>
+      </div>
+
+      <div class="arch-arrow">↕ REST / SSE Streaming</div>
+
+      <div class="arch-dashed-group">
+        <p class="arch-group-label">Agent Runtime (Vercel Functions / Serverless)</p>
+        <div class="arch-row">
+          <div class="arch-box box-purple"><span class="icon">🤖</span>Agent Loop<br/>(LLM)</div>
+          <div class="arch-box box-purple"><span class="icon">🔧</span>Tool<br/>Dispatcher</div>
+          <div class="arch-box box-purple"><span class="icon">📦</span>Sandbox<br/>Interface</div>
+        </div>
+        <div style="margin-top:10px; font-size:.78rem; color:var(--muted); text-align:center;">
+          connectSandbox() → connectVercel() → VercelSandbox.create() / .connect()
+        </div>
+      </div>
+
+      <div class="arch-arrow">↕ @vercel/sandbox SDK (HTTPS + WebSocket)</div>
+
+      <div class="arch-dashed-group">
+        <p class="arch-group-label">Vercel Sandbox Infrastructure</p>
+        <div class="arch-row">
+          <div class="arch-box box-green"><span class="icon">🔥</span>Firecracker<br/>MicroVM</div>
+          <div class="arch-box box-green"><span class="icon">📁</span>Filesystem<br/>exec / fs ops</div>
+          <div class="arch-box box-green"><span class="icon">📸</span>Snapshot<br/>/ Resume</div>
+          <div class="arch-box box-green"><span class="icon">🌍</span>Port<br/>Tunneling</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout callout-blue" style="margin-top:28px;">
+      <span class="callout-icon">💡</span>
+      <div>
+        <strong>Key insight:</strong> Vercel's sandbox itself already uses Firecracker under the hood. The <code>@vercel/sandbox</code> SDK manages the MicroVM lifecycle via a proprietary HTTPS/WebSocket API, exposes ports through a tunnel, and supports snapshot-based hibernate/resume. Your replacement will replicate this surface area on your own infrastructure.
+      </div>
+    </div>
+
+    <div class="grid grid-2" style="margin-top:28px;">
+      <div class="card">
+        <h3 style="margin-bottom:12px; color:var(--accent3);">🔌 Connection Mechanism</h3>
+        <div class="flow">
+          <div class="flow-step">
+            <h4>1. connectSandbox()</h4>
+            <p>Entry point in <code>packages/sandbox/factory.ts</code>. Dispatches to <code>connectVercel()</code> based on <code>state.type</code>.</p>
+          </div>
+          <div class="flow-step">
+            <h4>2. connectVercel()</h4>
+            <p>Checks for a named (persistent) sandbox or creates a new one. Passes env vars, GitHub tokens, vCPU config, and lifecycle hooks.</p>
+          </div>
+          <div class="flow-step">
+            <h4>3. VercelSandbox.create() / .connect()</h4>
+            <p>Calls <code>@vercel/sandbox</code> SDK. SDK authenticates with Vercel's API, boots a Firecracker MicroVM, optionally restores a snapshot, sets a proactive timeout timer, then returns a running session.</p>
+          </div>
+          <div class="flow-step">
+            <h4>4. Sandbox Interface Operations</h4>
+            <p>Agent calls <code>exec()</code>, <code>readFile()</code>, <code>writeFile()</code>, <code>readdir()</code> etc. Each operation is proxied via HTTPS to the running VM.</p>
+          </div>
+          <div class="flow-step">
+            <h4>5. Port Tunneling</h4>
+            <p><code>domain(port)</code> returns a public URL for ports 3000, 5173, 4321, 8000. The SDK maintains a TLS tunnel from the VM's internal port to a public hostname.</p>
+          </div>
+          <div class="flow-step">
+            <h4>6. Snapshot &amp; Resume</h4>
+            <p><code>snapshot()</code> freezes VM state to a Vercel snapshot ID. Resume restores it instantly — no re-cloning or re-installing needed.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-bottom:14px; color:var(--accent4);">📋 Sandbox Interface Methods</h3>
+        <pre><span class="cm">// packages/sandbox/interface.ts</span>
+<span class="kw">interface</span> <span class="type">Sandbox</span> {
+  <span class="cm">// Filesystem</span>
+  <span class="fn">readFile</span>(path, encoding): <span class="type">Promise</span>&lt;string&gt;
+  <span class="fn">writeFile</span>(path, content): <span class="type">Promise</span>&lt;void&gt;
+  <span class="fn">stat</span>(path): <span class="type">Promise</span>&lt;<span class="type">SandboxStats</span>&gt;
+  <span class="fn">access</span>(path): <span class="type">Promise</span>&lt;void&gt;
+  <span class="fn">mkdir</span>(path, opts): <span class="type">Promise</span>&lt;void&gt;
+  <span class="fn">readdir</span>(path): <span class="type">Promise</span>&lt;<span class="type">Dirent</span>[]&gt;
+
+  <span class="cm">// Shell</span>
+  <span class="fn">exec</span>(cmd, cwd, timeoutMs): <span class="type">Promise</span>&lt;<span class="type">ExecResult</span>&gt;
+  <span class="fn">execDetached</span>(cmd, cwd): <span class="type">Promise</span>&lt;{commandId}&gt;
+
+  <span class="cm">// Lifecycle</span>
+  <span class="fn">stop</span>(): <span class="type">Promise</span>&lt;void&gt;
+  <span class="fn">snapshot</span>(): <span class="type">Promise</span>&lt;<span class="type">SnapshotResult</span>&gt;
+  <span class="fn">extendTimeout</span>(ms): <span class="type">Promise</span>&lt;{expiresAt}&gt;
+
+  <span class="cm">// Networking</span>
+  <span class="fn">domain</span>(port): string
+  <span class="fn">setGitHubAuthToken</span>(token): <span class="type">Promise</span>&lt;void&gt;
+}</pre>
+        <p style="color:var(--muted); font-size:.82rem; margin-top:10px;">
+          Your Firecracker sandbox only needs to implement this interface. The rest of the agent code stays unchanged.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── 2. FEASIBILITY ──────────────────────────────────────────── -->
+<section>
+  <div class="container">
+    <p class="section-label">Section 02</p>
+    <h2>Feasibility Analysis</h2>
+    <p class="section-desc">Can Firecracker replace the Vercel sandbox for polyglot execution with microservice networking? The short answer is <strong style="color:var(--accent2);">yes — and it excels at it</strong>.</p>
+
+    <div class="grid grid-3">
+
+      <div class="card">
+        <div style="font-size:1.8rem; margin-bottom:10px;">🌐</div>
+        <h3 style="color:var(--accent2); margin-bottom:8px;">Multi-language Support</h3>
+        <p style="color:var(--muted); font-size:.88rem;">Firecracker boots a full Linux guest. Any language runtime installable on Linux works: Node.js, Java, Python, Go, Ruby, PHP, Rust, Haskell, Brainfuck, or any golfing language. The rootfs is a standard ext4 image — just add packages.</p>
+        <div class="pill-group">
+          <span class="pill pill-green">Node.js</span>
+          <span class="pill pill-green">Java / JVM</span>
+          <span class="pill pill-green">Python</span>
+          <span class="pill pill-green">Go</span>
+          <span class="pill pill-green">Ruby</span>
+          <span class="pill pill-green">PHP</span>
+          <span class="pill pill-green">Rust</span>
+          <span class="pill pill-green">Golf langs</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="font-size:1.8rem; margin-bottom:10px;">🕸️</div>
+        <h3 style="color:var(--accent3); margin-bottom:8px;">TAP Network / Microservices</h3>
+        <p style="color:var(--muted); font-size:.88rem;">Firecracker exposes a <strong>TAP device</strong> on the host. Each MicroVM gets its own private IP. A Linux bridge or macvtap connects VMs together — exactly like a LAN. Services in different VMs can reach each other by IP, enabling true microservice topologies.</p>
+        <div class="pill-group">
+          <span class="pill pill-blue">TAP device</span>
+          <span class="pill pill-blue">Linux Bridge</span>
+          <span class="pill pill-blue">VM ↔ VM routing</span>
+          <span class="pill pill-blue">Port forwarding</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="font-size:1.8rem; margin-bottom:10px;">📸</div>
+        <h3 style="color:var(--accent5); margin-bottom:8px;">Snapshot / Resume</h3>
+        <p style="color:var(--muted); font-size:.88rem;">Firecracker supports <strong>full VM snapshots</strong> (memory + disk state) natively via its API. Resume time is under 150ms for a pre-snapshotted VM. This directly matches the hibernate/resume behavior of the Vercel sandbox.</p>
+        <div class="pill-group">
+          <span class="pill pill-orange">Memory snapshot</span>
+          <span class="pill pill-orange">Disk snapshot</span>
+          <span class="pill pill-orange">&lt;150ms resume</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="font-size:1.8rem; margin-bottom:10px;">⚡</div>
+        <h3 style="color:var(--accent4); margin-bottom:8px;">Boot Speed</h3>
+        <p style="color:var(--muted); font-size:.88rem;">Firecracker MicroVMs boot in <strong>~125ms</strong> — designed for serverless workloads (powers AWS Lambda). Paired with snapshots, cold-start for a pre-configured language environment is essentially instant.</p>
+        <div class="pill-group">
+          <span class="pill pill-purple">~125ms cold boot</span>
+          <span class="pill pill-purple">&lt;5ms snap resume</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="font-size:1.8rem; margin-bottom:10px;">🔒</div>
+        <h3 style="color:var(--accent); margin-bottom:8px;">Security Isolation</h3>
+        <p style="color:var(--muted); font-size:.88rem;">Each VM has its own kernel. No shared kernel namespaces between tenants. Firecracker enforces minimal device model — no legacy USB, serial buses, etc. — reducing attack surface vs Docker.</p>
+        <div class="pill-group">
+          <span class="pill pill-red">Hardware virt (KVM)</span>
+          <span class="pill pill-red">Minimal device model</span>
+          <span class="pill pill-red">Tenant isolation</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="font-size:1.8rem; margin-bottom:10px;">💾</div>
+        <h3 style="color:var(--accent2); margin-bottom:8px;">Resource Efficiency</h3>
+        <p style="color:var(--muted); font-size:.88rem;">Firecracker uses ~5MB base memory overhead per VM. You can run hundreds of VMs on a single host. vCPUs and memory are configured per-VM at launch time — the same model as the Vercel sandbox's <code>vcpus</code> option.</p>
+        <div class="pill-group">
+          <span class="pill pill-green">~5MB overhead</span>
+          <span class="pill pill-green">Configurable vCPU</span>
+          <span class="pill pill-green">Configurable RAM</span>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="callout callout-green" style="margin-top:32px;">
+      <span class="callout-icon">✅</span>
+      <div>
+        <strong>Verdict:</strong> Every capability required by Open-Agents' sandbox interface is achievable with raw Firecracker. The TAP network makes multi-VM microservice architecture a first-class feature. The only work is building the <em>management plane</em> — the HTTP/WebSocket API that wraps Firecracker's REST API and exposes it to the agent runtime.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── 3. TARGET ARCHITECTURE ────────────────────────────────── -->
+<section>
+  <div class="container">
+    <p class="section-label">Section 03</p>
+    <h2>Target Architecture: Firecracker Sandbox Platform</h2>
+    <p class="section-desc">A three-tier design: Agent Interface Layer → VM Management Plane → Firecracker MicroVMs with TAP networking.</p>
+
+    <div class="arch-diagram">
+      <p class="arch-group-label" style="font-size:.85rem; color:var(--text); margin-bottom:20px;">Full System Architecture</p>
+
+      <!-- Tier 1: Agent / Web -->
+      <div class="arch-dashed-group">
+        <p class="arch-group-label">Tier 1 — Agent Runtime (unchanged from Open-Agents)</p>
+        <div class="arch-row">
+          <div class="arch-box box-blue"><span class="icon">🤖</span>Agent Loop<br/>(LLM)</div>
+          <div class="arch-box box-blue"><span class="icon">🔧</span>Tool<br/>Dispatcher</div>
+          <div class="arch-box box-blue"><span class="icon">📦</span>Sandbox<br/>Interface</div>
+        </div>
+      </div>
+
+      <div class="arch-arrow">↕ HTTP / WebSocket (same Sandbox interface)</div>
+
+      <!-- Tier 2: Sandbox API Server -->
+      <div class="arch-dashed-group">
+        <p class="arch-group-label">Tier 2 — Sandbox Management Plane (new)</p>
+        <div class="arch-row">
+          <div class="arch-box box-purple"><span class="icon">🖥️</span>Sandbox<br/>API Server</div>
+          <div class="arch-box box-purple"><span class="icon">🗂️</span>Session<br/>Registry</div>
+          <div class="arch-box box-purple"><span class="icon">📸</span>Snapshot<br/>Store</div>
+          <div class="arch-box box-purple"><span class="icon">🌐</span>Port<br/>Proxy</div>
+          <div class="arch-box box-purple"><span class="icon">⏱️</span>Timeout<br/>Manager</div>
+        </div>
+        <div style="margin-top:10px; text-align:center; font-size:.78rem; color:var(--muted);">
+          Firecracker REST API client &nbsp;|&nbsp; TAP/bridge network manager &nbsp;|&nbsp; MMDS metadata service
+        </div>
+      </div>
+
+      <div class="arch-arrow">↕ Firecracker REST API (Unix socket per VM)</div>
+
+      <!-- Tier 3: MicroVMs -->
+      <div class="arch-dashed-group">
+        <p class="arch-group-label">Tier 3 — Firecracker MicroVMs (KVM host)</p>
+        <div class="arch-row">
+          <div class="arch-box box-green"><span class="icon">🔥</span>VM: Node.js<br/>Sandbox</div>
+          <div class="arch-box box-green"><span class="icon">☕</span>VM: Java<br/>Sandbox</div>
+          <div class="arch-box box-green"><span class="icon">🐍</span>VM: Python<br/>Sandbox</div>
+          <div class="arch-box box-orange"><span class="icon">⚙️</span>VM: Service A<br/>(microservice)</div>
+          <div class="arch-box box-orange"><span class="icon">🗄️</span>VM: Service B<br/>(microservice)</div>
+        </div>
+
+        <!-- TAP network row -->
+        <div style="margin-top:20px;">
+          <div class="arch-dashed-group" style="border-color: rgba(86,211,100,.3);">
+            <p class="arch-group-label" style="color:var(--accent2);">TAP Network Layer (Linux Bridge / br0)</p>
+            <div class="arch-row">
+              <div class="arch-box box-teal"><span class="icon">🔗</span>tap0<br/>10.0.0.2</div>
+              <div class="arch-box box-teal"><span class="icon">🔗</span>tap1<br/>10.0.0.3</div>
+              <div class="arch-box box-teal"><span class="icon">🔗</span>tap2<br/>10.0.0.4</div>
+              <div class="arch-box box-teal"><span class="icon">🔗</span>tap3<br/>10.0.0.5</div>
+              <div class="arch-box box-teal"><span class="icon">🔗</span>tap4<br/>10.0.0.6</div>
+            </div>
+            <div style="text-align:center; margin-top:10px; font-size:.78rem; color:var(--muted);">
+              Host bridge: br0 (10.0.0.1/24) — VMs route to each other and to the internet via NAT / iptables
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── 4. FIRECRACKER FEATURES ──────────────────────────────── -->
+<section>
+  <div class="container">
+    <p class="section-label">Section 04</p>
+    <h2>Firecracker Features You Will Use</h2>
+    <p class="section-desc">A complete mapping from Firecracker's native API to the sandbox capabilities your platform needs.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Firecracker Feature</th>
+            <th>API / Mechanism</th>
+            <th>Maps to Sandbox Capability</th>
+            <th>Category</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>MicroVM Boot</strong></td>
+            <td><code>PUT /machine-config</code>, <code>PUT /boot-source</code>, <code>PUT /actions {InstanceStart}</code></td>
+            <td>Cold-start a fresh sandbox</td>
+            <td><span class="badge badge-blue">Lifecycle</span></td>
+          </tr>
+          <tr>
+            <td><strong>Drive (rootfs)</strong></td>
+            <td><code>PUT /drives/rootfs</code> — attach ext4 image</td>
+            <td>Language-specific OS image (Node, Java, Python, etc.) baked into the drive</td>
+            <td><span class="badge badge-orange">Storage</span></td>
+          </tr>
+          <tr>
+            <td><strong>Block Device (workspace)</strong></td>
+            <td>Second <code>PUT /drives/workspace</code> — read/write data volume</td>
+            <td>Persistent workspace filesystem per session; supports <code>readFile/writeFile/readdir</code></td>
+            <td><span class="badge badge-orange">Storage</span></td>
+          </tr>
+          <tr>
+            <td><strong>TAP Network Interface</strong></td>
+            <td><code>PUT /network-interfaces/eth0</code> with <code>host_dev_name: tapN</code></td>
+            <td>Inter-VM networking; each VM gets a private IP; microservices can call each other</td>
+            <td><span class="badge badge-green">Networking</span></td>
+          </tr>
+          <tr>
+            <td><strong>MMDS (Metadata Service)</strong></td>
+            <td><code>PUT /mmds/config</code> + <code>PUT /mmds</code></td>
+            <td>Inject sandbox ID, env vars, GitHub tokens, session config into the VM at boot without re-creating images</td>
+            <td><span class="badge badge-purple">Config</span></td>
+          </tr>
+          <tr>
+            <td><strong>VM Snapshot (full state)</strong></td>
+            <td><code>PUT /actions {Pause}</code> + <code>PUT /snapshot/create</code></td>
+            <td><code>sandbox.snapshot()</code> — freeze and store VM memory + disk for instant resume</td>
+            <td><span class="badge badge-blue">Lifecycle</span></td>
+          </tr>
+          <tr>
+            <td><strong>VM Restore from Snapshot</strong></td>
+            <td><code>PUT /snapshot/load</code></td>
+            <td>Resume a hibernated sandbox in &lt;150ms — equivalent to Vercel's snapshot restore</td>
+            <td><span class="badge badge-blue">Lifecycle</span></td>
+          </tr>
+          <tr>
+            <td><strong>vCPU / Memory Config</strong></td>
+            <td><code>PUT /machine-config</code> — <code>vcpu_count</code>, <code>mem_size_mib</code></td>
+            <td>Per-sandbox resource sizing; mirrors <code>vcpus</code> option in the agent connect config</td>
+            <td><span class="badge badge-purple">Config</span></td>
+          </tr>
+          <tr>
+            <td><strong>Balloon Device</strong></td>
+            <td><code>PUT /balloon</code></td>
+            <td>Dynamic memory reclaim — return unused guest memory to host without stopping the VM</td>
+            <td><span class="badge badge-purple">Config</span></td>
+          </tr>
+          <tr>
+            <td><strong>Pause / Resume</strong></td>
+            <td><code>PUT /vm {state: Paused}</code> / <code>{state: Resumed}</code></td>
+            <td>Low-overhead hibernation without a full snapshot; useful for inactivity-based pause</td>
+            <td><span class="badge badge-blue">Lifecycle</span></td>
+          </tr>
+          <tr>
+            <td><strong>Virtio-vsock</strong></td>
+            <td><code>PUT /vsock</code></td>
+            <td>Host↔VM communication channel for the <em>sandbox agent</em> process (exec proxy, file proxy)</td>
+            <td><span class="badge badge-green">Networking</span></td>
+          </tr>
+          <tr>
+            <td><strong>Rate Limiter</strong></td>
+            <td>Per-drive and per-network-interface token-bucket rate limiters</td>
+            <td>Fair resource sharing in multi-tenant setups; prevent noisy-neighbour I/O</td>
+            <td><span class="badge badge-orange">Storage</span></td>
+          </tr>
+          <tr>
+            <td><strong>Serial / Logger</strong></td>
+            <td>Named FIFO for console; structured JSON logs via <code>--log-path</code></td>
+            <td>Debug visibility into VM boot errors and agent process crashes</td>
+            <td><span class="badge badge-purple">Config</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ── 5. TAP NETWORKING DEEP DIVE ──────────────────────────── -->
+<section>
+  <div class="container">
+    <p class="section-label">Section 05</p>
+    <h2>TAP Networking for Microservice Architecture</h2>
+    <p class="section-desc">How Firecracker's TAP device enables real VM-to-VM service communication — exactly what microservice topologies need.</p>
+
+    <div class="grid grid-2">
+      <div class="card">
+        <h3 style="color:var(--accent3); margin-bottom:14px;">🏗️ Host Network Setup</h3>
+        <pre><span class="cm"># Create bridge</span>
+<span class="fn">ip link add</span> <span class="attr">br0</span> <span class="kw">type</span> bridge
+<span class="fn">ip addr add</span> <span class="str">10.0.0.1/24</span> dev <span class="attr">br0</span>
+<span class="fn">ip link set</span> <span class="attr">br0</span> up
+
+<span class="cm"># Per-VM TAP (created by mgmt plane)</span>
+<span class="fn">ip tuntap add</span> <span class="attr">tap0</span> <span class="kw">mode</span> tap
+<span class="fn">ip link set</span> <span class="attr">tap0</span> master <span class="attr">br0</span>
+<span class="fn">ip link set</span> <span class="attr">tap0</span> up
+
+<span class="cm"># NAT for internet access</span>
+<span class="fn">iptables -t nat -A POSTROUTING</span> \
+  -o <span class="attr">eth0</span> -j <span class="attr">MASQUERADE</span>
+<span class="fn">iptables -A FORWARD</span> \
+  -i <span class="attr">br0</span> -j <span class="attr">ACCEPT</span></pre>
+      </div>
+
+      <div class="card">
+        <h3 style="color:var(--accent2); margin-bottom:14px;">🔥 Firecracker VM Network Config</h3>
+        <pre><span class="cm">// Firecracker API payload</span>
+<span class="fn">PUT</span> <span class="str">/network-interfaces/eth0</span>
+{
+  <span class="attr">"iface_id"</span>: <span class="str">"eth0"</span>,
+  <span class="attr">"host_dev_name"</span>: <span class="str">"tap0"</span>,
+  <span class="attr">"guest_mac"</span>: <span class="str">"AA:FC:00:00:00:01"</span>,
+  <span class="attr">"rx_rate_limiter"</span>: {
+    <span class="attr">"bandwidth"</span>: {
+      <span class="attr">"size"</span>: <span class="num">125000000</span>, <span class="cm">// 1 Gbps</span>
+      <span class="attr">"refill_time"</span>: <span class="num">1000</span>
+    }
+  }
+}
+
+<span class="cm">// Inside VM (cloud-init / init script)</span>
+<span class="fn">ip addr add</span> <span class="str">10.0.0.2/24</span> dev eth0
+<span class="fn">ip route add</span> default via <span class="str">10.0.0.1</span></pre>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:20px;">
+      <h3 style="color:var(--accent4); margin-bottom:20px;">🕸️ Microservice Topology Example</h3>
+
+      <!-- Visual network diagram -->
+      <div style="background: var(--surface2); border-radius:8px; padding:24px; overflow-x:auto;">
+        <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap; justify-content:center;">
+
+          <div style="text-align:center;">
+            <div style="background:rgba(121,192,255,.12); border:1.5px solid rgba(121,192,255,.4); border-radius:8px; padding:14px 18px; color:var(--accent3); font-size:.82rem; font-weight:600;">
+              🤖 Agent<br/>(outside VMs)<br/><small style="color:var(--muted);">host / serverless</small>
+            </div>
+          </div>
+
+          <div style="color:var(--muted); font-size:1.4rem;">⟷</div>
+
+          <div style="background:rgba(210,168,255,.1); border:1.5px solid rgba(210,168,255,.3); border-radius:8px; padding:14px 18px; text-align:center; color:var(--accent4); font-size:.82rem; font-weight:600;">
+            🖥️ Mgmt Plane<br/>(Sandbox API)<br/><small style="color:var(--muted);">br0: 10.0.0.1</small>
+          </div>
+
+          <div style="color:var(--muted); font-size:1.4rem;">⟷</div>
+
+          <div style="display:flex; flex-direction:column; gap:10px;">
+            <div style="background:rgba(86,211,100,.1); border:1.5px solid rgba(86,211,100,.3); border-radius:8px; padding:10px 16px; color:var(--accent2); font-size:.8rem; font-weight:600;">
+              🔥 VM: Frontend (Node.js)<br/><small style="color:var(--muted);">10.0.0.2 — port 3000</small>
+            </div>
+            <div style="background:rgba(86,211,100,.1); border:1.5px solid rgba(86,211,100,.3); border-radius:8px; padding:10px 16px; color:var(--accent2); font-size:.8rem; font-weight:600;">
+              ☕ VM: API Gateway (Java)<br/><small style="color:var(--muted);">10.0.0.3 — port 8080</small>
+            </div>
+            <div style="background:rgba(86,211,100,.1); border:1.5px solid rgba(86,211,100,.3); border-radius:8px; padding:10px 16px; color:var(--accent2); font-size:.8rem; font-weight:600;">
+              🐍 VM: Auth Service (Python)<br/><small style="color:var(--muted);">10.0.0.4 — port 5000</small>
+            </div>
+            <div style="background:rgba(255,166,87,.1); border:1.5px solid rgba(255,166,87,.3); border-radius:8px; padding:10px 16px; color:var(--accent5); font-size:.8rem; font-weight:600;">
+              🗄️ VM: DB Proxy (Go)<br/><small style="color:var(--muted);">10.0.0.5 — port 5432</small>
+            </div>
+          </div>
+
+        </div>
+        <p style="text-align:center; margin-top:16px; font-size:.78rem; color:var(--muted);">
+          All VMs on the same bridge share the 10.0.0.0/24 subnet. Frontend calls API at 10.0.0.3:8080; API calls Auth at 10.0.0.4:5000 — zero configuration service discovery via IP.
+        </p>
+      </div>
+
+      <div class="callout callout-blue" style="margin-top:20px;">
+        <span class="callout-icon">🔑</span>
+        <div>
+          <strong>Service Discovery:</strong> For a more production-like setup, run a lightweight DNS server (e.g., <code>dnsmasq</code>) on the host bridge. Each VM gets a hostname (<code>node-sandbox.local</code>, <code>java-api.local</code>) — services can call each other by name, not just IP.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── 6. MANAGEMENT PLANE COMPONENTS ──────────────────────── -->
+<section>
+  <div class="container">
+    <p class="section-label">Section 06</p>
+    <h2>Management Plane Components</h2>
+    <p class="section-desc">The management plane is the HTTP/WebSocket API server that wraps Firecracker and exposes the Sandbox interface to the agent runtime.</p>
+
+    <div class="grid grid-2">
+
+      <div class="card">
+        <h3 style="color:var(--accent3); margin-bottom:12px;">🖥️ Sandbox API Server</h3>
+        <p style="color:var(--muted); font-size:.88rem; margin-bottom:14px;">An HTTP server (Go or Rust recommended for performance) that exposes endpoints mirroring the Sandbox interface. Communicates with Firecracker via its Unix domain socket REST API.</p>
+        <div class="flow">
+          <div class="flow-step">
+            <h4>POST /sandboxes</h4>
+            <p>Boot a new VM. Picks a language rootfs, assigns a TAP device and IP, injects env vars via MMDS.</p>
+          </div>
+          <div class="flow-step">
+            <h4>POST /sandboxes/:id/exec</h4>
+            <p>Runs a shell command inside the VM via the vsock-connected agent process. Returns stdout/stderr/exitCode.</p>
+          </div>
+          <div class="flow-step">
+            <h4>GET/PUT /sandboxes/:id/files/:path</h4>
+            <p>Proxies file reads/writes to the VM via vsock or by mounting the workspace drive.</p>
+          </div>
+          <div class="flow-step">
+            <h4>POST /sandboxes/:id/snapshot</h4>
+            <p>Pauses the VM, calls Firecracker snapshot API, stores memory+disk files to S3/EBS, returns snapshot ID.</p>
+          </div>
+          <div class="flow-step">
+            <h4>WS /sandboxes/:id/stream</h4>
+            <p>WebSocket stream for real-time stdout streaming from long-running commands (dev servers, builds).</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="color:var(--accent4); margin-bottom:12px;">📦 In-VM Agent Process</h3>
+        <p style="color:var(--muted); font-size:.88rem; margin-bottom:14px;">A small Go or Rust binary baked into every rootfs. Listens on a vsock port, handles exec and file operations. This is the guest-side counterpart of the management plane.</p>
+        <pre><span class="cm">// Runs inside every MicroVM</span>
+<span class="kw">type</span> <span class="type">VMAgent</span> <span class="kw">struct</span> {
+  vsockListener <span class="type">net.Listener</span>   <span class="cm">// CID 3, port 52</span>
+}
+
+<span class="kw">func</span> (a *<span class="type">VMAgent</span>) <span class="fn">handleExec</span>(req <span class="type">ExecReq</span>) <span class="type">ExecRes</span> {
+  cmd := <span class="fn">exec.Command</span>(<span class="str">"sh"</span>, <span class="str">"-c"</span>, req.Cmd)
+  cmd.Dir = req.Cwd
+  <span class="cm">// stream stdout/stderr back over vsock</span>
+  <span class="kw">return</span> <span class="fn">streamOutput</span>(cmd)
+}
+
+<span class="kw">func</span> (a *<span class="type">VMAgent</span>) <span class="fn">handleReadFile</span>(p <span class="kw">string</span>) []<span class="kw">byte</span> {
+  <span class="kw">return</span> os.<span class="fn">ReadFile</span>(p)
+}
+
+<span class="kw">func</span> (a *<span class="type">VMAgent</span>) <span class="fn">handleWriteFile</span>(
+  p <span class="kw">string</span>, data []<span class="kw">byte</span>) <span class="kw">error</span> {
+  <span class="kw">return</span> os.<span class="fn">WriteFile</span>(p, data, <span class="num">0644</span>)
+}</pre>
+      </div>
+
+      <div class="card">
+        <h3 style="color:var(--accent5); margin-bottom:12px;">🌐 Port Proxy / Tunnel</h3>
+        <p style="color:var(--muted); font-size:.88rem; margin-bottom:14px;">Expose dev-server ports (3000, 5173, 8080…) to the public internet. Two approaches:</p>
+        <div class="grid grid-2" style="gap:12px;">
+          <div style="background:var(--surface2); border-radius:8px; padding:14px; border:1px solid var(--border);">
+            <strong style="font-size:.85rem; color:var(--accent3);">Reverse Proxy (nginx/Caddy)</strong>
+            <p style="font-size:.8rem; color:var(--muted); margin-top:6px;">iptables DNAT from host port → VM IP:port. Caddy provides automatic TLS. Works for named subdomains: <code>{id}-3000.sandbox.yourdomain.com</code></p>
+          </div>
+          <div style="background:var(--surface2); border-radius:8px; padding:14px; border:1px solid var(--border);">
+            <strong style="font-size:.85rem; color:var(--accent2);">Tunnel (frp / cloudflared)</strong>
+            <p style="font-size:.8rem; color:var(--muted); margin-top:6px;">VM opens outbound tunnel to edge node. No public IP on host needed. Best for dynamic ephemeral ports with random subdomain URLs.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="color:var(--accent2); margin-bottom:12px;">📸 Snapshot Store</h3>
+        <p style="color:var(--muted); font-size:.88rem; margin-bottom:14px;">Stores VM memory dumps and disk images between sessions.</p>
+        <div class="flow">
+          <div class="flow-step">
+            <h4>Snapshot</h4>
+            <p>Pause VM → <code>PUT /snapshot/create</code> (memory file + diff disk) → upload to S3 / local NFS → return snapshot ID.</p>
+          </div>
+          <div class="flow-step">
+            <h4>Resume</h4>
+            <p>Download snapshot files from store → <code>PUT /snapshot/load</code> → resume VM in &lt;150ms with all processes running.</p>
+          </div>
+          <div class="flow-step">
+            <h4>Base Images</h4>
+            <p>Pre-built rootfs per language (Node-LTS, Java 21, Python 3.12, etc.) stored as read-only base snapshots. New sandboxes fork from these — copy-on-write via overlayfs or sparse files.</p>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ── 7. LANGUAGE RUNTIME IMAGES ──────────────────────────── -->
+<section>
+  <div class="container">
+    <p class="section-label">Section 07</p>
+    <h2>Language Runtime Images</h2>
+    <p class="section-desc">Each language gets its own minimal Linux rootfs. Images are pre-snapshotted with the runtime installed so new sandboxes restore instantly.</p>
+
+    <div class="grid grid-4">
+
+      <div class="card">
+        <div style="font-size:2rem; margin-bottom:10px;">🟩</div>
+        <h3 style="font-size:1rem; margin-bottom:8px;">Node.js</h3>
+        <ul style="color:var(--muted); font-size:.82rem; padding-left:18px; line-height:1.8;">
+          <li>Alpine / Debian slim base</li>
+          <li>Node LTS (via nvm or direct)</li>
+          <li>npm / pnpm / yarn</li>
+          <li>Ports: 3000, 5173, 4321</li>
+          <li>Dev: Vite, Next.js, Express</li>
+        </ul>
+        <div class="pill-group">
+          <span class="pill pill-green">Express</span>
+          <span class="pill pill-green">Next.js</span>
+          <span class="pill pill-green">Bun</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="font-size:2rem; margin-bottom:10px;">☕</div>
+        <h3 style="font-size:1rem; margin-bottom:8px;">Java / JVM</h3>
+        <ul style="color:var(--muted); font-size:.82rem; padding-left:18px; line-height:1.8;">
+          <li>OpenJDK 21 (GraalVM opt.)</li>
+          <li>Maven + Gradle</li>
+          <li>Kotlin support</li>
+          <li>Ports: 8080, 8443</li>
+          <li>Spring Boot, Quarkus</li>
+        </ul>
+        <div class="pill-group">
+          <span class="pill pill-orange">Spring</span>
+          <span class="pill pill-orange">Quarkus</span>
+          <span class="pill pill-orange">Kotlin</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="font-size:2rem; margin-bottom:10px;">🐍</div>
+        <h3 style="font-size:1rem; margin-bottom:8px;">Python</h3>
+        <ul style="color:var(--muted); font-size:.82rem; padding-left:18px; line-height:1.8;">
+          <li>Python 3.12 + uv/pip</li>
+          <li>Poetry for dependencies</li>
+          <li>Jupyter kernel optional</li>
+          <li>Ports: 5000, 8000, 8888</li>
+          <li>FastAPI, Flask, Django</li>
+        </ul>
+        <div class="pill-group">
+          <span class="pill pill-blue">FastAPI</span>
+          <span class="pill pill-blue">Django</span>
+          <span class="pill pill-blue">Jupyter</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="font-size:2rem; margin-bottom:10px;">🦫</div>
+        <h3 style="font-size:1rem; margin-bottom:8px;">Go</h3>
+        <ul style="color:var(--muted); font-size:.82rem; padding-left:18px; line-height:1.8;">
+          <li>Go 1.22+</li>
+          <li>go modules</li>
+          <li>Air for hot reload</li>
+          <li>Ports: 8080, 9000</li>
+          <li>Gin, Echo, Fiber</li>
+        </ul>
+        <div class="pill-group">
+          <span class="pill pill-green">Gin</span>
+          <span class="pill pill-green">gRPC</span>
+          <span class="pill pill-green">Echo</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="font-size:2rem; margin-bottom:10px;">🦀</div>
+        <h3 style="font-size:1rem; margin-bottom:8px;">Rust</h3>
+        <ul style="color:var(--muted); font-size:.82rem; padding-left:18px; line-height:1.8;">
+          <li>Stable + nightly toolchains</li>
+          <li>cargo + cargo-watch</li>
+          <li>Axum, Actix-web</li>
+          <li>Ports: 8080, 3000</li>
+          <li>WASM compilation target</li>
+        </ul>
+        <div class="pill-group">
+          <span class="pill pill-red">Axum</span>
+          <span class="pill pill-red">Actix</span>
+          <span class="pill pill-red">WASM</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="font-size:2rem; margin-bottom:10px;">💎</div>
+        <h3 style="font-size:1rem; margin-bottom:8px;">Ruby / PHP</h3>
+        <ul style="color:var(--muted); font-size:.82rem; padding-left:18px; line-height:1.8;">
+          <li>Ruby 3.3 + rbenv/bundler</li>
+          <li>PHP 8.3 + Composer</li>
+          <li>Rails, Laravel</li>
+          <li>Ports: 3000, 80</li>
+        </ul>
+        <div class="pill-group">
+          <span class="pill pill-purple">Rails</span>
+          <span class="pill pill-purple">Laravel</span>
+          <span class="pill pill-purple">Sinatra</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="font-size:2rem; margin-bottom:10px;">🏌️</div>
+        <h3 style="font-size:1rem; margin-bottom:8px;">Code Golf Langs</h3>
+        <ul style="color:var(--muted); font-size:.82rem; padding-left:18px; line-height:1.8;">
+          <li>APL, J, K, Q</li>
+          <li>BrainF***, Befunge</li>
+          <li>Perl, AWK, sed</li>
+          <li>GolfScript, 05AB1E</li>
+          <li>Batch execution only</li>
+        </ul>
+        <div class="pill-group">
+          <span class="pill pill-orange">APL</span>
+          <span class="pill pill-orange">Perl</span>
+          <span class="pill pill-orange">GolfScript</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="font-size:2rem; margin-bottom:10px;">🔧</div>
+        <h3 style="font-size:1rem; margin-bottom:8px;">Universal Base</h3>
+        <ul style="color:var(--muted); font-size:.82rem; padding-left:18px; line-height:1.8;">
+          <li>git, curl, wget</li>
+          <li>build-essential</li>
+          <li>docker-in-docker optional</li>
+          <li>Any apt/apk package</li>
+          <li>Full shell + cron</li>
+        </ul>
+        <div class="pill-group">
+          <span class="pill pill-blue">git</span>
+          <span class="pill pill-blue">bash</span>
+          <span class="pill pill-blue">make</span>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="callout callout-orange" style="margin-top:28px;">
+      <span class="callout-icon">⚠️</span>
+      <div>
+        <strong>Rootfs tip:</strong> Use <strong>overlayfs</strong> to layer a thin read-write workspace on top of a shared read-only base image. All VMs of the same language type share the immutable base layer — only the per-session writes are stored separately. This dramatically reduces disk usage and makes "create new sandbox" as fast as creating a new overlay directory.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── 8. OPEN-AGENTS INTEGRATION ──────────────────────────── -->
+<section>
+  <div class="container">
+    <p class="section-label">Section 08</p>
+    <h2>Integrating with Open-Agents (Drop-in Replacement)</h2>
+    <p class="section-desc">The agent runtime never talks to Firecracker directly. It uses the <code>Sandbox</code> interface. You only need to implement a new adapter class.</p>
+
+    <div class="grid grid-2">
+      <div class="card">
+        <h3 style="color:var(--accent3); margin-bottom:14px;">🔌 New Adapter: FirecrackerSandbox</h3>
+        <pre><span class="cm">// packages/sandbox/firecracker/sandbox.ts</span>
+<span class="kw">export class</span> <span class="type">FirecrackerSandbox</span>
+  <span class="kw">implements</span> <span class="type">Sandbox</span> {
+
+  <span class="kw">readonly</span> type = <span class="str">"cloud"</span> <span class="kw">as const</span>;
+  <span class="kw">readonly</span> workingDirectory = <span class="str">"/workspace"</span>;
+
+  <span class="kw">constructor</span>(
+    <span class="kw">private</span> mgmtUrl: <span class="kw">string</span>,  <span class="cm">// mgmt plane URL</span>
+    <span class="kw">private</span> sandboxId: <span class="kw">string</span>,
+    <span class="kw">public</span> <span class="kw">readonly</span> env?: <span class="type">Record</span>&lt;<span class="kw">string</span>, <span class="kw">string</span>&gt;
+  ) {}
+
+  <span class="kw">async</span> <span class="fn">exec</span>(
+    cmd: <span class="kw">string</span>, cwd: <span class="kw">string</span>, timeoutMs: <span class="kw">number</span>
+  ): <span class="type">Promise</span>&lt;<span class="type">ExecResult</span>&gt; {
+    <span class="cm">// POST to mgmt plane → VM agent via vsock</span>
+    <span class="kw">return</span> <span class="fn">fetch</span>(<span class="str">`${this.mgmtUrl}/sandboxes/</span>
+      <span class="str">${this.sandboxId}/exec`</span>, {
+      method: <span class="str">'POST'</span>,
+      body: <span class="type">JSON</span>.<span class="fn">stringify</span>({cmd, cwd, timeoutMs})
+    }).<span class="fn">then</span>(r =&gt; r.<span class="fn">json</span>());
+  }
+
+  <span class="kw">async</span> <span class="fn">snapshot</span>(): <span class="type">Promise</span>&lt;<span class="type">SnapshotResult</span>&gt; {
+    <span class="kw">return</span> <span class="fn">fetch</span>(<span class="str">`${this.mgmtUrl}/sandboxes/</span>
+      <span class="str">${this.sandboxId}/snapshot`</span>,
+      {method: <span class="str">'POST'</span>})
+      .<span class="fn">then</span>(r =&gt; r.<span class="fn">json</span>());
+  }
+
+  <span class="fn">domain</span>(port: <span class="kw">number</span>): <span class="kw">string</span> {
+    <span class="kw">return</span> <span class="str">`https://${this.sandboxId}-${port}</span>
+      <span class="str">.sandbox.yourdomain.com`</span>;
+  }
+  <span class="cm">// ... readFile, writeFile, readdir, etc.</span>
+}</pre>
+      </div>
+
+      <div class="card">
+        <h3 style="color:var(--accent4); margin-bottom:14px;">🔧 Factory Integration</h3>
+        <pre><span class="cm">// packages/sandbox/factory.ts — extended</span>
+<span class="kw">export type</span> <span class="type">SandboxState</span> =
+  | ({ type: <span class="str">"vercel"</span> } &amp; <span class="type">VercelState</span>)
+  | ({ type: <span class="str">"firecracker"</span> } &amp; <span class="type">FirecrackerState</span>);
+
+<span class="kw">export async function</span> <span class="fn">connectSandbox</span>(
+  config: <span class="type">SandboxConnectConfig</span>
+): <span class="type">Promise</span>&lt;<span class="type">Sandbox</span>&gt; {
+  <span class="kw">switch</span> (config.state.type) {
+    <span class="kw">case</span> <span class="str">"vercel"</span>:
+      <span class="kw">return</span> <span class="fn">connectVercel</span>(
+        config.state, config.options);
+
+    <span class="kw">case</span> <span class="str">"firecracker"</span>:
+      <span class="kw">return</span> <span class="fn">connectFirecracker</span>(
+        config.state, config.options);
+  }
+}</pre>
+
+        <div style="margin-top:20px;">
+          <h3 style="color:var(--accent5); margin-bottom:12px; font-size:.95rem;">📋 FirecrackerState Shape</h3>
+          <pre><span class="kw">interface</span> <span class="type">FirecrackerState</span> {
+  type: <span class="str">"firecracker"</span>;
+  sandboxId?: <span class="kw">string</span>;      <span class="cm">// resume existing VM</span>
+  snapshotId?: <span class="kw">string</span>;     <span class="cm">// restore snapshot</span>
+  language: <span class="str">"node"</span> | <span class="str">"java"</span>
+           | <span class="str">"python"</span> | <span class="str">"go"</span>
+           | <span class="str">"rust"</span> | <span class="str">"ruby"</span>
+           | <span class="str">"golf"</span> | <span class="str">"universal"</span>;
+  networkGroup?: <span class="kw">string</span>;   <span class="cm">// bridge for microsvcs</span>
+  source?: {
+    repo: <span class="kw">string</span>;
+    branch: <span class="kw">string</span>;
+  };
+}</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── 9. COMPARISON TABLE ──────────────────────────────────── -->
+<section>
+  <div class="container">
+    <p class="section-label">Section 09</p>
+    <h2>Vercel Sandbox vs Firecracker Sandbox</h2>
+    <p class="section-desc">Side-by-side comparison across every capability dimension.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Capability</th>
+            <th>Vercel Sandbox (current)</th>
+            <th>Your Firecracker Sandbox</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Boot time</strong></td>
+            <td>~1–3s (opaque)</td>
+            <td><span class="badge badge-green">~125ms cold / &lt;5ms snap</span></td>
+            <td>Firecracker designed for sub-second boot</td>
+          </tr>
+          <tr>
+            <td><strong>Multi-language</strong></td>
+            <td>Ubuntu base only</td>
+            <td><span class="badge badge-green">8+ dedicated images</span></td>
+            <td>Any language installable on Linux</td>
+          </tr>
+          <tr>
+            <td><strong>VM-to-VM networking</strong></td>
+            <td><span class="badge badge-orange">Not supported</span></td>
+            <td><span class="badge badge-green">TAP + Linux bridge</span></td>
+            <td>Full L2 network between VMs</td>
+          </tr>
+          <tr>
+            <td><strong>Microservice topology</strong></td>
+            <td><span class="badge badge-orange">Not supported</span></td>
+            <td><span class="badge badge-green">Named network groups</span></td>
+            <td>Multiple VMs share a bridge subnet</td>
+          </tr>
+          <tr>
+            <td><strong>Snapshot / Resume</strong></td>
+            <td>Native (Vercel ID)</td>
+            <td><span class="badge badge-green">Native Firecracker API</span></td>
+            <td>Store to S3 or local disk</td>
+          </tr>
+          <tr>
+            <td><strong>Port exposure</strong></td>
+            <td>4 hardcoded ports (3000, 5173, 4321, 8000)</td>
+            <td><span class="badge badge-green">Any port, configurable</span></td>
+            <td>Caddy reverse proxy with wildcard TLS</td>
+          </tr>
+          <tr>
+            <td><strong>Resource config</strong></td>
+            <td>vcpus option via SDK</td>
+            <td><span class="badge badge-green">Full vCPU + RAM control</span></td>
+            <td>Plus balloon device for dynamic memory</td>
+          </tr>
+          <tr>
+            <td><strong>Security isolation</strong></td>
+            <td>KVM (via Vercel infra)</td>
+            <td><span class="badge badge-green">KVM hardware isolation</span></td>
+            <td>Minimal attack surface, no shared kernel</td>
+          </tr>
+          <tr>
+            <td><strong>Vendor lock-in</strong></td>
+            <td><span class="badge badge-orange">Vercel only</span></td>
+            <td><span class="badge badge-green">Any KVM host</span></td>
+            <td>AWS, GCP, bare metal, Hetzner, etc.</td>
+          </tr>
+          <tr>
+            <td><strong>Cost</strong></td>
+            <td>Vercel compute pricing</td>
+            <td><span class="badge badge-green">~10x cheaper on bare metal</span></td>
+            <td>Depends on hosting strategy</td>
+          </tr>
+          <tr>
+            <td><strong>Env var injection</strong></td>
+            <td>SDK config option</td>
+            <td><span class="badge badge-green">MMDS metadata service</span></td>
+            <td>Secure, no re-imaging required</td>
+          </tr>
+          <tr>
+            <td><strong>GitHub auth brokering</strong></td>
+            <td>Network policy (SDK)</td>
+            <td><span class="badge badge-blue">Via MMDS + in-VM git config</span></td>
+            <td>MMDS injects ephemeral token at runtime</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ── 10. IMPLEMENTATION ROADMAP ──────────────────────────── -->
+<section>
+  <div class="container">
+    <p class="section-label">Section 10</p>
+    <h2>Implementation Roadmap</h2>
+    <p class="section-desc">A phased plan from zero to a production-ready Firecracker sandbox platform.</p>
+
+    <div class="grid grid-3">
+
+      <div class="card" style="border-color: rgba(86,211,100,.3);">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px;">
+          <div style="background:rgba(86,211,100,.15); border-radius:50%; width:32px; height:32px; display:flex; align-items:center; justify-content:center; font-weight:700; color:var(--accent2);">1</div>
+          <h3 style="color:var(--accent2);">Phase 1: Foundation</h3>
+        </div>
+        <div class="flow">
+          <div class="flow-step">
+            <h4>KVM host setup</h4>
+            <p>Provision a bare-metal or EC2 metal instance with KVM enabled. Install Firecracker binary.</p>
+          </div>
+          <div class="flow-step">
+            <h4>Base rootfs images</h4>
+            <p>Build minimal Alpine-based images for Node.js and Python. Package as ext4 with VM agent binary included.</p>
+          </div>
+          <div class="flow-step">
+            <h4>TAP network bootstrap</h4>
+            <p>Script to create br0, assign IPs, set up NAT/iptables. Test VM-to-internet connectivity.</p>
+          </div>
+          <div class="flow-step">
+            <h4>Manual exec test</h4>
+            <p>Boot a VM via curl to Firecracker API. SSH in and verify shell access.</p>
+          </div>
+        </div>
+        <div class="pill-group" style="margin-top:12px;">
+          <span class="pill pill-green">Firecracker binary</span>
+          <span class="pill pill-green">ext4 rootfs</span>
+          <span class="pill pill-green">TAP/bridge</span>
+        </div>
+      </div>
+
+      <div class="card" style="border-color: rgba(121,192,255,.3);">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px;">
+          <div style="background:rgba(121,192,255,.15); border-radius:50%; width:32px; height:32px; display:flex; align-items:center; justify-content:center; font-weight:700; color:var(--accent3);">2</div>
+          <h3 style="color:var(--accent3);">Phase 2: Management Plane</h3>
+        </div>
+        <div class="flow">
+          <div class="flow-step">
+            <h4>VM agent binary</h4>
+            <p>Write Go/Rust agent that listens on vsock, handles exec and file operations with streaming support.</p>
+          </div>
+          <div class="flow-step">
+            <h4>Sandbox API server</h4>
+            <p>HTTP server wrapping Firecracker REST API. Endpoints: create, exec, readFile, writeFile, snapshot, stop.</p>
+          </div>
+          <div class="flow-step">
+            <h4>MMDS integration</h4>
+            <p>Inject env vars and sandbox ID at boot via MMDS. In-VM agent reads metadata on startup.</p>
+          </div>
+          <div class="flow-step">
+            <h4>Snapshot store</h4>
+            <p>Implement pause → snapshot → upload to S3 flow. Implement restore → load → resume flow.</p>
+          </div>
+        </div>
+        <div class="pill-group" style="margin-top:12px;">
+          <span class="pill pill-blue">HTTP API</span>
+          <span class="pill pill-blue">vsock agent</span>
+          <span class="pill pill-blue">MMDS</span>
+          <span class="pill pill-blue">S3 snapshots</span>
+        </div>
+      </div>
+
+      <div class="card" style="border-color: rgba(255,166,87,.3);">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px;">
+          <div style="background:rgba(255,166,87,.15); border-radius:50%; width:32px; height:32px; display:flex; align-items:center; justify-content:center; font-weight:700; color:var(--accent5);">3</div>
+          <h3 style="color:var(--accent5);">Phase 3: Production</h3>
+        </div>
+        <div class="flow">
+          <div class="flow-step">
+            <h4>Open-Agents adapter</h4>
+            <p>Implement <code>FirecrackerSandbox</code> class, extend factory.ts. Drop into Open-Agents with zero agent code changes.</p>
+          </div>
+          <div class="flow-step">
+            <h4>Port proxy</h4>
+            <p>Caddy reverse proxy with wildcard TLS certs. Dynamic subdomain routing per VM per port.</p>
+          </div>
+          <div class="flow-step">
+            <h4>Microservice networking</h4>
+            <p>Named network groups (bridges) per project. VMs in the same group share a /24 subnet and can call each other by IP/hostname.</p>
+          </div>
+          <div class="flow-step">
+            <h4>All language images</h4>
+            <p>Build and pre-snapshot rootfs images for all 8 language targets. CI/CD pipeline for image updates.</p>
+          </div>
+        </div>
+        <div class="pill-group" style="margin-top:12px;">
+          <span class="pill pill-orange">Caddy TLS</span>
+          <span class="pill pill-orange">Multi-bridge</span>
+          <span class="pill pill-orange">8 lang images</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ── 11. SUMMARY ──────────────────────────────────────────── -->
+<section>
+  <div class="container">
+    <p class="section-label">Section 11</p>
+    <h2>Summary</h2>
+
+    <div class="grid grid-2">
+      <div class="card" style="border-color: rgba(86,211,100,.3);">
+        <h3 style="color:var(--accent2); margin-bottom:16px;">✅ What You Get</h3>
+        <ul style="color:var(--muted); font-size:.88rem; line-height:2; padding-left:20px;">
+          <li>Full drop-in replacement for the Vercel sandbox — same interface, same agent code</li>
+          <li>8+ language runtimes in pre-snapshotted, instantly-bootable MicroVMs</li>
+          <li>Real L2 TAP networking enabling genuine microservice architectures across VMs</li>
+          <li>Firecracker snapshot/resume (&lt;150ms) for hibernate/wake lifecycle</li>
+          <li>Complete infrastructure control — no vendor lock-in, runs on any KVM host</li>
+          <li>~10x cost reduction vs Vercel sandbox pricing at scale</li>
+          <li>MMDS-based secure env var and token injection without rebuilding images</li>
+        </ul>
+      </div>
+
+      <div class="card" style="border-color: rgba(255,166,87,.3);">
+        <h3 style="color:var(--accent5); margin-bottom:16px;">⚠️ What You Need to Build</h3>
+        <ul style="color:var(--muted); font-size:.88rem; line-height:2; padding-left:20px;">
+          <li><strong>VM agent binary</strong> — guest-side process for exec and file proxy over vsock</li>
+          <li><strong>Management API server</strong> — wraps Firecracker REST API, manages TAP devices and IP allocation</li>
+          <li><strong>Rootfs builder pipeline</strong> — CI/CD to build, test, and pre-snapshot language images</li>
+          <li><strong>Snapshot store</strong> — S3 or NFS backend for memory + disk snapshots</li>
+          <li><strong>Port proxy</strong> — Caddy/nginx with wildcard TLS for public dev-server URLs</li>
+          <li><strong>Open-Agents adapter</strong> — <code>FirecrackerSandbox</code> class implementing the <code>Sandbox</code> interface</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="callout callout-green" style="margin-top:28px;">
+      <span class="callout-icon">🚀</span>
+      <div>
+        <strong>Bottom line:</strong> Building a Firecracker-based sandbox is absolutely feasible and is, in fact, what Vercel itself does under the hood. The TAP network support makes it uniquely suited to microservice architectures that single-container solutions cannot support. The main engineering investment is the management plane — estimated 4–8 weeks for a production-quality implementation with all features.
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <p>Firecracker Sandbox Architecture Design &nbsp;·&nbsp; Built for the MicroVMs project &nbsp;·&nbsp; Based on <a href="https://github.com/vercel-labs/open-agents" style="color:var(--accent3); text-decoration:none;">vercel-labs/open-agents</a> analysis &amp; <a href="https://github.com/firecracker-microvm/firecracker" style="color:var(--accent3); text-decoration:none;">Firecracker</a> documentation</p>
+</footer>
+
+</body>
+</html>
