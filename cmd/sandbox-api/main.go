@@ -341,7 +341,11 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	// In KVM mode, forward the command to the in-VM agent.
 	if sb.agentURL != "" {
 		log.Printf("[%s] exec (KVM): %s (cwd: %s)", id, req.Cmd, req.Cwd)
-		body, _ := json.Marshal(req)
+		body, err := json.Marshal(req)
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, "marshal request: %v", err)
+			return
+		}
 		agentResp, err := http.Post(sb.agentURL+"/exec", "application/json", bytes.NewReader(body))
 		if err != nil {
 			httpError(w, http.StatusBadGateway, "agent unreachable: %v", err)
@@ -350,7 +354,9 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		defer agentResp.Body.Close()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(agentResp.StatusCode)
-		io.Copy(w, agentResp.Body)
+		if _, err := io.Copy(w, agentResp.Body); err != nil {
+			log.Printf("[%s] exec: copy agent response: %v", id, err)
+		}
 		return
 	}
 
@@ -387,7 +393,9 @@ func (s *Server) handleReadFile(w http.ResponseWriter, r *http.Request) {
 		defer agentResp.Body.Close()
 		w.Header().Set("Content-Type", agentResp.Header.Get("Content-Type"))
 		w.WriteHeader(agentResp.StatusCode)
-		io.Copy(w, agentResp.Body)
+		if _, err := io.Copy(w, agentResp.Body); err != nil {
+			log.Printf("[%s] readfile: copy agent response: %v", id, err)
+		}
 		return
 	}
 
@@ -420,8 +428,16 @@ func (s *Server) handleWriteFile(w http.ResponseWriter, r *http.Request) {
 
 	// In KVM mode, forward to in-VM agent.
 	if sb.agentURL != "" {
-		body, _ := json.Marshal(req)
-		httpReq, _ := http.NewRequest(http.MethodPut, sb.agentURL+"/files/"+path, bytes.NewReader(body))
+		body, err := json.Marshal(req)
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, "marshal request: %v", err)
+			return
+		}
+		httpReq, err := http.NewRequest(http.MethodPut, sb.agentURL+"/files/"+path, bytes.NewReader(body))
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, "build agent request: %v", err)
+			return
+		}
 		httpReq.Header.Set("Content-Type", "application/json")
 		agentResp, err := http.DefaultClient.Do(httpReq)
 		if err != nil {
@@ -431,7 +447,9 @@ func (s *Server) handleWriteFile(w http.ResponseWriter, r *http.Request) {
 		defer agentResp.Body.Close()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(agentResp.StatusCode)
-		io.Copy(w, agentResp.Body)
+		if _, err := io.Copy(w, agentResp.Body); err != nil {
+			log.Printf("[%s] writefile: copy agent response: %v", id, err)
+		}
 		return
 	}
 
@@ -469,7 +487,9 @@ func (s *Server) handleReadDir(w http.ResponseWriter, r *http.Request) {
 		defer agentResp.Body.Close()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(agentResp.StatusCode)
-		io.Copy(w, agentResp.Body)
+		if _, err := io.Copy(w, agentResp.Body); err != nil {
+			log.Printf("[%s] readdir: copy agent response: %v", id, err)
+		}
 		return
 	}
 
@@ -549,6 +569,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // startFirecrackerVM launches a Firecracker process, configures the VM via the
 // Firecracker REST API, boots it, and waits for the in-VM agent to be ready.
+//
+// instance must not be visible to other goroutines yet (i.e. not yet added to
+// s.sandboxes), so its fields can be set without holding s.mu.
 func (s *Server) startFirecrackerVM(ctx context.Context, instance *SandboxInstance) error {
 	tap := instance.TAP
 
@@ -572,8 +595,9 @@ func (s *Server) startFirecrackerVM(ctx context.Context, instance *SandboxInstan
 	if err != nil {
 		return fmt.Errorf("create log file: %w", err)
 	}
+	defer logFile.Close()
 
-	// #nosec G204 — firecrackerBin is operator-supplied via FIRECRACKER_BIN env var
+	// #nosec G204 -- firecrackerBin is operator-supplied via FIRECRACKER_BIN env var
 	cmd := exec.CommandContext(ctx, s.firecrackerBin,
 		"--api-sock", socketPath,
 		"--id", instance.ID,
@@ -583,15 +607,16 @@ func (s *Server) startFirecrackerVM(ctx context.Context, instance *SandboxInstan
 	cmd.Stderr = logFile
 
 	if err := cmd.Start(); err != nil {
-		logFile.Close()
 		return fmt.Errorf("start firecracker process: %w", err)
 	}
 	instance.process = cmd.Process
 
+	// cleanup kills the VM on any subsequent error so we don't leak processes.
+	cleanup := func() { _ = cmd.Process.Kill() }
+
 	// Wait up to 5 s for the Unix socket to appear.
 	if err := waitForSocket(socketPath, 5*time.Second); err != nil {
-		_ = cmd.Process.Kill()
-		logFile.Close()
+		cleanup()
 		return fmt.Errorf("firecracker socket not ready: %w", err)
 	}
 
@@ -602,8 +627,7 @@ func (s *Server) startFirecrackerVM(ctx context.Context, instance *SandboxInstan
 		VCPUCount:  instance.VCPUs,
 		MemSizeMiB: instance.MemSizeMiB,
 	}); err != nil {
-		_ = cmd.Process.Kill()
-		logFile.Close()
+		cleanup()
 		return fmt.Errorf("set machine config: %w", err)
 	}
 
@@ -617,8 +641,7 @@ func (s *Server) startFirecrackerVM(ctx context.Context, instance *SandboxInstan
 		KernelImagePath: s.kernelImage,
 		BootArgs:        bootArgs,
 	}); err != nil {
-		_ = cmd.Process.Kill()
-		logFile.Close()
+		cleanup()
 		return fmt.Errorf("set boot source: %w", err)
 	}
 
@@ -628,8 +651,7 @@ func (s *Server) startFirecrackerVM(ctx context.Context, instance *SandboxInstan
 		IsRootDevice: true,
 		IsReadOnly:   false,
 	}); err != nil {
-		_ = cmd.Process.Kill()
-		logFile.Close()
+		cleanup()
 		return fmt.Errorf("add rootfs drive: %w", err)
 	}
 
@@ -638,14 +660,12 @@ func (s *Server) startFirecrackerVM(ctx context.Context, instance *SandboxInstan
 		HostDevName: tap.Name,
 		GuestMAC:    tap.MAC,
 	}); err != nil {
-		_ = cmd.Process.Kill()
-		logFile.Close()
+		cleanup()
 		return fmt.Errorf("add network interface: %w", err)
 	}
 
 	if err := fc.StartVM(ctx); err != nil {
-		_ = cmd.Process.Kill()
-		logFile.Close()
+		cleanup()
 		return fmt.Errorf("start VM: %w", err)
 	}
 
@@ -653,13 +673,11 @@ func (s *Server) startFirecrackerVM(ctx context.Context, instance *SandboxInstan
 	agentURL := fmt.Sprintf("http://%s:9090", tap.IP)
 	instance.agentURL = agentURL
 	if err := waitForAgent(agentURL, 30*time.Second); err != nil {
-		_ = cmd.Process.Kill()
-		logFile.Close()
+		cleanup()
 		return fmt.Errorf("in-VM agent not ready: %w", err)
 	}
 
-	log.Printf("[%s] VM booted — agent at %s", instance.ID, agentURL)
-	logFile.Close()
+	log.Printf("[%s] VM booted -- agent at %s", instance.ID, agentURL)
 	return nil
 }
 
