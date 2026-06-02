@@ -7,34 +7,44 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/linzhicong0/MicroVMs/pkg/firecracker"
 	"github.com/linzhicong0/MicroVMs/pkg/network"
 	"github.com/linzhicong0/MicroVMs/pkg/snapshot"
 )
 
 // SandboxInstance represents a running or paused MicroVM sandbox.
 type SandboxInstance struct {
-	ID          string            `json:"id"`
-	Language    string            `json:"language"`
-	Status      string            `json:"status"` // running, paused, stopped
-	VCPUs       int               `json:"vcpus"`
-	MemSizeMiB  int               `json:"mem_size_mib"`
-	TAP         *network.TAPDevice `json:"tap"`
-	CreatedAt   time.Time         `json:"created_at"`
-	NetworkGroup string           `json:"network_group,omitempty"`
-	EnvVars     map[string]string `json:"env_vars,omitempty"`
-	WorkDir     string            `json:"work_dir"`
+	ID           string             `json:"id"`
+	Language     string             `json:"language"`
+	Status       string             `json:"status"` // running, paused, stopped
+	VCPUs        int                `json:"vcpus"`
+	MemSizeMiB   int                `json:"mem_size_mib"`
+	TAP          *network.TAPDevice `json:"tap"`
+	CreatedAt    time.Time          `json:"created_at"`
+	NetworkGroup string             `json:"network_group,omitempty"`
+	EnvVars      map[string]string  `json:"env_vars,omitempty"`
+	WorkDir      string             `json:"work_dir"`
+	// KVM mode management fields (not serialized to JSON)
+	process    *os.Process // Firecracker process handle
+	socketPath string      // Firecracker Unix socket path
+	agentURL   string      // In-VM agent base URL (http://{ip}:9090)
+	rootfsPath string      // Per-VM rootfs image copy path
 }
 
 // CreateSandboxRequest is the request body for creating a new sandbox.
@@ -74,6 +84,11 @@ type Server struct {
 	snapStore    *snapshot.Store
 	port         string
 	baseDomain   string
+	// KVM / Firecracker mode (all empty = simulation mode)
+	firecrackerBin string // path to firecracker binary
+	kernelImage    string // path to guest kernel (vmlinux.bin)
+	rootfsImage    string // path to base rootfs ext4 image
+	socketDir      string // directory for Firecracker Unix sockets
 }
 
 func main() {
@@ -92,17 +107,42 @@ func main() {
 		snapshotDir = "/tmp/firecracker-snapshots"
 	}
 
+	// KVM / Firecracker mode configuration
+	firecrackerBin := os.Getenv("FIRECRACKER_BIN")
+	kernelImage := os.Getenv("KERNEL_IMAGE")
+	rootfsImage := os.Getenv("ROOTFS_IMAGE")
+	socketDir := os.Getenv("SOCKET_DIR")
+	if socketDir == "" {
+		socketDir = "/tmp/firecracker-sockets"
+	}
+
+	if firecrackerBin != "" {
+		if kernelImage == "" {
+			log.Fatal("KERNEL_IMAGE must be set when FIRECRACKER_BIN is set")
+		}
+		if rootfsImage == "" {
+			log.Fatal("ROOTFS_IMAGE must be set when FIRECRACKER_BIN is set")
+		}
+		if err := os.MkdirAll(socketDir, 0755); err != nil {
+			log.Fatalf("Failed to create socket dir: %v", err)
+		}
+	}
+
 	snapStore, err := snapshot.NewStore(snapshotDir)
 	if err != nil {
 		log.Fatalf("Failed to create snapshot store: %v", err)
 	}
 
 	srv := &Server{
-		sandboxes:  make(map[string]*SandboxInstance),
-		netManager: network.NewManager("", "", ""),
-		snapStore:  snapStore,
-		port:       port,
-		baseDomain: baseDomain,
+		sandboxes:      make(map[string]*SandboxInstance),
+		netManager:     network.NewManager("", "", ""),
+		snapStore:      snapStore,
+		port:           port,
+		baseDomain:     baseDomain,
+		firecrackerBin: firecrackerBin,
+		kernelImage:    kernelImage,
+		rootfsImage:    rootfsImage,
+		socketDir:      socketDir,
 	}
 
 	mux := http.NewServeMux()
@@ -146,6 +186,15 @@ func main() {
 	log.Printf("🔥 Sandbox API Server listening on :%s", port)
 	log.Printf("   Base domain: %s", baseDomain)
 	log.Printf("   Snapshot dir: %s", snapshotDir)
+	if firecrackerBin != "" {
+		log.Printf("   Mode: KVM (Firecracker)")
+		log.Printf("   Firecracker binary: %s", firecrackerBin)
+		log.Printf("   Kernel image: %s", kernelImage)
+		log.Printf("   Rootfs image: %s", rootfsImage)
+		log.Printf("   Socket dir: %s", socketDir)
+	} else {
+		log.Printf("   Mode: simulation (set FIRECRACKER_BIN to enable KVM)")
+	}
 
 	if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("Server error: %v", err)
@@ -198,19 +247,21 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 		WorkDir:      workDir,
 	}
 
+	// In KVM mode, start a real Firecracker VM.
+	if s.firecrackerBin != "" {
+		if err := s.startFirecrackerVM(r.Context(), instance); err != nil {
+			_ = s.netManager.DestroyTAP(tap.Name)
+			_ = os.RemoveAll(workDir)
+			httpError(w, http.StatusInternalServerError, "start VM: %v", err)
+			return
+		}
+	}
+
 	s.mu.Lock()
 	s.sandboxes[sandboxID] = instance
 	s.mu.Unlock()
 
 	log.Printf("Created sandbox %s [%s] on %s (%s)", sandboxID, req.Language, tap.Name, tap.IP)
-
-	// In production, this would:
-	// 1. Create TAP device on host
-	// 2. Start Firecracker process with Unix socket
-	// 3. Configure VM via Firecracker API (machine-config, boot-source, drives, network, vsock)
-	// 4. Inject metadata via MMDS
-	// 5. Start the VM
-	// 6. Wait for in-VM agent to report ready
 
 	jsonResponse(w, http.StatusCreated, instance)
 }
@@ -250,7 +301,20 @@ func (s *Server) handleStopSandbox(w http.ResponseWriter, r *http.Request) {
 	delete(s.sandboxes, id)
 	s.mu.Unlock()
 
-	// In production: stop Firecracker process, destroy TAP device, clean up workspace
+	// In KVM mode: stop Firecracker process and clean up resources.
+	if sb.process != nil {
+		_ = sb.process.Kill()
+	}
+	if sb.socketPath != "" {
+		_ = os.Remove(sb.socketPath)
+	}
+	if sb.rootfsPath != "" {
+		_ = os.Remove(sb.rootfsPath)
+	}
+	if sb.TAP != nil {
+		_ = s.netManager.DestroyTAP(sb.TAP.Name)
+	}
+
 	log.Printf("Stopped sandbox %s", id)
 	jsonResponse(w, http.StatusOK, map[string]string{"status": "stopped"})
 }
@@ -274,8 +338,23 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// In production, this would forward the command to the in-VM agent
-	// via vsock connection. For the POC, we simulate execution.
+	// In KVM mode, forward the command to the in-VM agent.
+	if sb.agentURL != "" {
+		log.Printf("[%s] exec (KVM): %s (cwd: %s)", id, req.Cmd, req.Cwd)
+		body, _ := json.Marshal(req)
+		agentResp, err := http.Post(sb.agentURL+"/exec", "application/json", bytes.NewReader(body))
+		if err != nil {
+			httpError(w, http.StatusBadGateway, "agent unreachable: %v", err)
+			return
+		}
+		defer agentResp.Body.Close()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(agentResp.StatusCode)
+		io.Copy(w, agentResp.Body)
+		return
+	}
+
+	// Simulation mode: echo back the command.
 	log.Printf("[%s] exec: %s (cwd: %s)", id, req.Cmd, req.Cwd)
 
 	// POC simulation: execute locally in the workspace directory
@@ -298,7 +377,20 @@ func (s *Server) handleReadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// In production: forward to in-VM agent via vsock
+	// In KVM mode, forward to in-VM agent.
+	if sb.agentURL != "" {
+		agentResp, err := http.Get(sb.agentURL + "/files/" + path)
+		if err != nil {
+			httpError(w, http.StatusBadGateway, "agent unreachable: %v", err)
+			return
+		}
+		defer agentResp.Body.Close()
+		w.Header().Set("Content-Type", agentResp.Header.Get("Content-Type"))
+		w.WriteHeader(agentResp.StatusCode)
+		io.Copy(w, agentResp.Body)
+		return
+	}
+
 	fullPath := fmt.Sprintf("%s/%s", sb.WorkDir, path)
 	content, err := os.ReadFile(fullPath)
 	if err != nil {
@@ -326,7 +418,23 @@ func (s *Server) handleWriteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// In production: forward to in-VM agent via vsock
+	// In KVM mode, forward to in-VM agent.
+	if sb.agentURL != "" {
+		body, _ := json.Marshal(req)
+		httpReq, _ := http.NewRequest(http.MethodPut, sb.agentURL+"/files/"+path, bytes.NewReader(body))
+		httpReq.Header.Set("Content-Type", "application/json")
+		agentResp, err := http.DefaultClient.Do(httpReq)
+		if err != nil {
+			httpError(w, http.StatusBadGateway, "agent unreachable: %v", err)
+			return
+		}
+		defer agentResp.Body.Close()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(agentResp.StatusCode)
+		io.Copy(w, agentResp.Body)
+		return
+	}
+
 	fullPath := fmt.Sprintf("%s/%s", sb.WorkDir, path)
 	if err := os.MkdirAll(fmt.Sprintf("%s/%s", sb.WorkDir, dirOf(path)), 0755); err != nil {
 		httpError(w, http.StatusInternalServerError, "create parent dir: %v", err)
@@ -348,6 +456,20 @@ func (s *Server) handleReadDir(w http.ResponseWriter, r *http.Request) {
 	sb, ok := s.getSandbox(id)
 	if !ok {
 		httpError(w, http.StatusNotFound, "sandbox %s not found", id)
+		return
+	}
+
+	// In KVM mode, forward to in-VM agent.
+	if sb.agentURL != "" {
+		agentResp, err := http.Get(sb.agentURL + "/readdir/" + path)
+		if err != nil {
+			httpError(w, http.StatusBadGateway, "agent unreachable: %v", err)
+			return
+		}
+		defer agentResp.Body.Close()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(agentResp.StatusCode)
+		io.Copy(w, agentResp.Body)
 		return
 	}
 
@@ -424,6 +546,172 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 // Helper functions
+
+// startFirecrackerVM launches a Firecracker process, configures the VM via the
+// Firecracker REST API, boots it, and waits for the in-VM agent to be ready.
+func (s *Server) startFirecrackerVM(ctx context.Context, instance *SandboxInstance) error {
+	tap := instance.TAP
+
+	// Create the TAP device on the host (requires root / CAP_NET_ADMIN).
+	if err := s.netManager.CreateTAP(tap); err != nil {
+		return fmt.Errorf("create TAP device: %w", err)
+	}
+
+	// Create a per-VM copy of the base rootfs image.
+	rootfsPath := fmt.Sprintf("%s/%s.ext4", instance.WorkDir, instance.ID)
+	if err := copyFile(s.rootfsImage, rootfsPath); err != nil {
+		return fmt.Errorf("copy rootfs: %w", err)
+	}
+	instance.rootfsPath = rootfsPath
+
+	// Start the Firecracker process.
+	socketPath := fmt.Sprintf("%s/%s.sock", s.socketDir, instance.ID)
+	instance.socketPath = socketPath
+
+	logFile, err := os.Create(fmt.Sprintf("%s/%s.log", s.socketDir, instance.ID))
+	if err != nil {
+		return fmt.Errorf("create log file: %w", err)
+	}
+
+	// #nosec G204 — firecrackerBin is operator-supplied via FIRECRACKER_BIN env var
+	cmd := exec.CommandContext(ctx, s.firecrackerBin,
+		"--api-sock", socketPath,
+		"--id", instance.ID,
+		"--log-level", "Info",
+	)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+
+	if err := cmd.Start(); err != nil {
+		logFile.Close()
+		return fmt.Errorf("start firecracker process: %w", err)
+	}
+	instance.process = cmd.Process
+
+	// Wait up to 5 s for the Unix socket to appear.
+	if err := waitForSocket(socketPath, 5*time.Second); err != nil {
+		_ = cmd.Process.Kill()
+		logFile.Close()
+		return fmt.Errorf("firecracker socket not ready: %w", err)
+	}
+
+	// Configure the VM via the Firecracker REST API.
+	fc := firecracker.NewClient(socketPath)
+
+	if err := fc.SetMachineConfig(ctx, firecracker.MachineConfig{
+		VCPUCount:  instance.VCPUs,
+		MemSizeMiB: instance.MemSizeMiB,
+	}); err != nil {
+		_ = cmd.Process.Kill()
+		logFile.Close()
+		return fmt.Errorf("set machine config: %w", err)
+	}
+
+	// Boot args: serial console + static IP via kernel cmdline.
+	bootArgs := fmt.Sprintf(
+		"console=ttyS0 reboot=k panic=1 pci=off nomodules ro "+
+			"ip=%s::10.0.0.1:255.255.255.0::eth0:off",
+		tap.IP,
+	)
+	if err := fc.SetBootSource(ctx, firecracker.BootSource{
+		KernelImagePath: s.kernelImage,
+		BootArgs:        bootArgs,
+	}); err != nil {
+		_ = cmd.Process.Kill()
+		logFile.Close()
+		return fmt.Errorf("set boot source: %w", err)
+	}
+
+	if err := fc.AddDrive(ctx, firecracker.Drive{
+		DriveID:      "rootfs",
+		PathOnHost:   rootfsPath,
+		IsRootDevice: true,
+		IsReadOnly:   false,
+	}); err != nil {
+		_ = cmd.Process.Kill()
+		logFile.Close()
+		return fmt.Errorf("add rootfs drive: %w", err)
+	}
+
+	if err := fc.AddNetworkInterface(ctx, firecracker.NetworkInterface{
+		IfaceID:     "eth0",
+		HostDevName: tap.Name,
+		GuestMAC:    tap.MAC,
+	}); err != nil {
+		_ = cmd.Process.Kill()
+		logFile.Close()
+		return fmt.Errorf("add network interface: %w", err)
+	}
+
+	if err := fc.StartVM(ctx); err != nil {
+		_ = cmd.Process.Kill()
+		logFile.Close()
+		return fmt.Errorf("start VM: %w", err)
+	}
+
+	// Wait up to 30 s for the in-VM agent (listening on port 9090) to become ready.
+	agentURL := fmt.Sprintf("http://%s:9090", tap.IP)
+	instance.agentURL = agentURL
+	if err := waitForAgent(agentURL, 30*time.Second); err != nil {
+		_ = cmd.Process.Kill()
+		logFile.Close()
+		return fmt.Errorf("in-VM agent not ready: %w", err)
+	}
+
+	log.Printf("[%s] VM booted — agent at %s", instance.ID, agentURL)
+	logFile.Close()
+	return nil
+}
+
+// waitForSocket polls until the Firecracker Unix socket exists or the timeout expires.
+func waitForSocket(path string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("timed out waiting for socket %s", path)
+}
+
+// waitForAgent polls the agent's /health endpoint until it responds OK or the timeout expires.
+func waitForAgent(agentURL string, timeout time.Duration) error {
+	client := &http.Client{Timeout: 1 * time.Second}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(agentURL + "/health")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("timed out waiting for agent at %s", agentURL)
+}
+
+// copyFile copies src to dst, creating any necessary parent directories.
+func copyFile(src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return err
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, in)
+	return err
+}
 
 func (s *Server) getSandbox(id string) (*SandboxInstance, bool) {
 	s.mu.RLock()
