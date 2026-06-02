@@ -37,7 +37,7 @@ echo "   Installing Alpine base system..."
 # In production: alpine-make-rootfs or debootstrap
 
 # Create essential directories
-mkdir -p "$MOUNT_DIR"/{bin,sbin,usr/bin,usr/sbin,etc,proc,sys,dev,tmp,root,workspace}
+mkdir -p "$MOUNT_DIR"/{bin,sbin,usr/bin,usr/sbin,etc/init.d,etc/network,proc,sys,dev,tmp,root,workspace}
 
 # Install the VM agent binary
 echo "   Installing VM agent..."
