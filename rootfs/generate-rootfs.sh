@@ -40,6 +40,7 @@ cleanup() {
         umount "${MOUNT_DIR}"       2>/dev/null || true
     fi
     [[ -d "${MOUNT_DIR:-}" ]] && rmdir "${MOUNT_DIR}" 2>/dev/null || true
+    rm -f "${MINIROOTFS_TMP:-}"
     exit $rc
 }
 trap cleanup EXIT
@@ -189,7 +190,7 @@ GOENV
         chroot "$MOUNT_DIR" java -version
         chroot "$MOUNT_DIR" mvn  --version
         # Set JAVA_HOME in the default shell profile
-        JAVA_HOME_PATH="$(chroot "$MOUNT_DIR" sh -c 'readlink -f /usr/bin/java | sed "s:/bin/java::"')"
+        JAVA_HOME_PATH="$(chroot "$MOUNT_DIR" sh -c 'readlink -f /usr/bin/java | sed "s|/bin/java||"')"
         cat >> "$MOUNT_DIR/etc/profile" << JAVAENV
 
 # Java environment
@@ -251,7 +252,7 @@ if [[ -f "$MOUNT_DIR/etc/inittab" ]]; then
 fi
 
 # ─── unmount ─────────────────────────────────────────────────────────────────
-echo "🔧  Finalising image..."
+echo "🔧  Finalizing image..."
 umount "$MOUNT_DIR/proc"
 umount "$MOUNT_DIR/sys"
 umount "$MOUNT_DIR/dev"
