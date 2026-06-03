@@ -106,17 +106,38 @@ docker-compose up --build
 ### Option 3: Full Firecracker (requires KVM host)
 
 ```bash
-# 1. Setup host networking
+# 1. Build the binaries first
+make build
+
+# 2. Setup host networking (requires root)
 sudo ./scripts/setup-network.sh
 
-# 2. Build rootfs images
+# 3. Build a rootfs image for your language
 sudo ./rootfs/build-rootfs.sh node rootfs/node.ext4
 
-# 3. Start the management plane
-./bin/sandbox-api
+# 4. Set required environment variables and start the management plane
+#    FIRECRACKER_BIN  – path to the firecracker binary
+#                       (download from https://github.com/firecracker-microvm/firecracker/releases)
+#    KERNEL_IMAGE     – path to your vmlinux.bin guest kernel
+#    ROOTFS_IMAGE     – path to the rootfs ext4 image built in step 3
+export FIRECRACKER_BIN=/usr/local/bin/firecracker
+export KERNEL_IMAGE=/path/to/vmlinux.bin
+export ROOTFS_IMAGE=rootfs/node.ext4
 
-# 4. The API will manage real Firecracker VMs
+sudo -E ./bin/sandbox-api
+
+# 5. The API will manage real Firecracker VMs via KVM.
+#    Each POST /sandboxes will spawn a Firecracker process, configure and boot a
+#    MicroVM, and wait for the in-VM agent to become ready.
 ```
+
+> **Note:** Firecracker requires KVM access.  Running `sandbox-api` as root (or a user
+> in the `kvm` group with `CAP_NET_ADMIN`) is necessary for TAP device creation.
+>
+> Optional env vars:
+> - `SOCKET_DIR` – directory for Firecracker Unix sockets (default `/tmp/firecracker-sockets`)
+> - `PORT` – HTTP port for the management API (default `8080`)
+> - `SNAPSHOT_DIR` – directory for VM snapshots (default `/tmp/firecracker-snapshots`)
 
 ## API Reference
 
