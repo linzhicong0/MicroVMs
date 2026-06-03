@@ -112,8 +112,14 @@ make build
 # 2. Setup host networking (requires root)
 sudo ./scripts/setup-network.sh
 
-# 3. Build a rootfs image for your language
-sudo ./rootfs/build-rootfs.sh node rootfs/node.ext4
+# 3. Generate a rootfs image for your chosen language (interactive prompt)
+sudo ./rootfs/generate-rootfs.sh
+# Or non-interactively:
+sudo ./rootfs/generate-rootfs.sh --language go    # Go 1.22+
+sudo ./rootfs/generate-rootfs.sh --language java  # OpenJDK 21 + Maven
+# Makefile shortcuts:
+#   make rootfs-go
+#   make rootfs-java
 
 # 4. Set required environment variables and start the management plane
 #    FIRECRACKER_BIN  – path to the firecracker binary
@@ -122,7 +128,7 @@ sudo ./rootfs/build-rootfs.sh node rootfs/node.ext4
 #    ROOTFS_IMAGE     – path to the rootfs ext4 image built in step 3
 export FIRECRACKER_BIN=/usr/local/bin/firecracker
 export KERNEL_IMAGE=/path/to/vmlinux.bin
-export ROOTFS_IMAGE=rootfs/node.ext4
+export ROOTFS_IMAGE=rootfs/go.ext4   # or rootfs/java.ext4
 
 sudo -E ./bin/sandbox-api
 

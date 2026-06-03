@@ -36,3 +36,14 @@ setup-network:
 # Teardown host networking (requires root)
 teardown-network:
 	sudo ./scripts/teardown-network.sh
+
+# Interactively generate an ext4 rootfs for Go or Java (requires root)
+generate-rootfs:
+	sudo ./rootfs/generate-rootfs.sh
+
+# Non-interactive shorthand targets
+rootfs-go:
+	sudo ./rootfs/generate-rootfs.sh --language go
+
+rootfs-java:
+	sudo ./rootfs/generate-rootfs.sh --language java
