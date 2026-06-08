@@ -31,6 +31,16 @@ ALPINE_MIRROR="https://dl-cdn.alpinelinux.org/alpine"
 die()  { echo "❌ $*" >&2; exit 1; }
 info() { echo "   $*"; }
 
+# Normalize architecture for official download URLs.
+# Alpine uses x86_64/aarch64; Go/Node use amd64/arm64.
+download_arch() {
+    case "${1:-$ARCH}" in
+        x86_64)  echo "amd64" ;;
+        aarch64) echo "arm64" ;;
+        *)       echo "$ARCH" ;;
+    esac
+}
+
 cleanup() {
     local rc=$?
     if mountpoint -q "${MOUNT_DIR:-}" 2>/dev/null; then
@@ -141,7 +151,7 @@ curl -fsSL --progress-bar -o "$MINIROOTFS_TMP" "$MINIROOTFS_URL" \
 # ─── create ext4 image ───────────────────────────────────────────────────────
 echo "💾  Creating ${SIZE_MB} MB ext4 image: $OUTPUT"
 dd if=/dev/zero of="$OUTPUT" bs=1M count="$SIZE_MB" status=progress
-mkfs.ext4 -F -L "rootfs-${LANGUAGE}" "$OUTPUT"
+mkfs.ext4 -F -O ^has_journal -L "rootfs-${LANGUAGE}" "$OUTPUT"
 
 # ─── mount image ─────────────────────────────────────────────────────────────
 MOUNT_DIR="$(mktemp -d /tmp/rootfs-mount.XXXXXX)"
@@ -177,9 +187,16 @@ chroot "$MOUNT_DIR" apk add --no-progress \
 # ─── install language-specific packages ──────────────────────────────────────
 case "$LANGUAGE" in
     go|universal)
-        echo "🐹  Installing Go runtime..."
-        chroot "$MOUNT_DIR" apk add --no-progress go
-        chroot "$MOUNT_DIR" go version
+        GO_VER="${GO_VERSION:-1.22.10}"
+        DL_ARCH="$(download_arch)"
+        GO_TAR="go${GO_VER}.linux-${DL_ARCH}.tar.gz"
+        echo "🐹  Installing Go ${GO_VER} (direct download)..."
+        curl -fsSL --progress-bar "https://go.dev/dl/${GO_TAR}" \
+            -o "/tmp/${GO_TAR}" \
+            || die "Failed to download Go from https://go.dev/dl/${GO_TAR}"
+        tar -C "$MOUNT_DIR/usr/local" -xzf "/tmp/${GO_TAR}"
+        rm -f "/tmp/${GO_TAR}"
+        chroot "$MOUNT_DIR" /usr/local/go/bin/go version
         mkdir -p "$MOUNT_DIR/root/go/src" \
                  "$MOUNT_DIR/root/go/pkg" \
                  "$MOUNT_DIR/root/go/bin"
@@ -207,15 +224,17 @@ export PATH="\$PATH:\$JAVA_HOME/bin"
 JAVAENV
         ;;&  # fall through to next match
     node|universal)
-        echo "🟢  Installing Node.js runtime..."
-        chroot "$MOUNT_DIR" apk add --no-progress nodejs npm
+        NODE_VER="${NODE_VERSION:-22.12.0}"
+        DL_ARCH="$(download_arch)"
+        NODE_TAR="node-v${NODE_VER}-linux-${DL_ARCH}.tar.xz"
+        echo "🟢  Installing Node.js ${NODE_VER} (direct download)..."
+        curl -fsSL --progress-bar "https://nodejs.org/dist/v${NODE_VER}/${NODE_TAR}" \
+            -o "/tmp/${NODE_TAR}" \
+            || die "Failed to download Node.js from https://nodejs.org/dist/v${NODE_VER}/${NODE_TAR}"
+        tar -C "$MOUNT_DIR/usr/local" --strip-components=1 -xJf "/tmp/${NODE_TAR}"
+        rm -f "/tmp/${NODE_TAR}"
         chroot "$MOUNT_DIR" node --version
         chroot "$MOUNT_DIR" npm --version
-        cat >> "$MOUNT_DIR/etc/profile" << 'NODEENV'
-
-# Node.js environment
-export PATH="$PATH:/usr/local/bin"
-NODEENV
         ;;&  # fall through to next match
     python|universal)
         echo "🐍  Installing Python runtime..."
