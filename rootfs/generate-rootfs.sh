@@ -1,15 +1,16 @@
 #!/bin/bash
 # generate-rootfs.sh — Interactively generates an ext4 rootfs image for Firecracker.
 #
-# Supported runtimes: go (Go 1.22+), java (OpenJDK 21)
-# Base system: Alpine Linux (minimal, musl-based)
+# Supported runtimes: go (Go 1.22+), java (OpenJDK 21), node (Node.js + npm),
+#                     python (Python 3 + pip), universal (all of the above)
 #
 # Usage (interactive):
 #   sudo ./rootfs/generate-rootfs.sh
 #
 # Usage (non-interactive):
 #   sudo ./rootfs/generate-rootfs.sh --language go
-#   sudo ./rootfs/generate-rootfs.sh --language java --output /path/to/java.ext4
+#   sudo ./rootfs/generate-rootfs.sh --language node --output /path/to/node.ext4
+#   sudo ./rootfs/generate-rootfs.sh --language universal
 #
 # Environment variables:
 #   SIZE_MB      — image size in MB (default: 2048)
@@ -74,8 +75,8 @@ if [[ -z "$LANGUAGE" ]]; then
     echo "================================="
     echo "Which language runtime do you want in the rootfs?"
     echo ""
-    PS3=$'\nEnter choice [1-3]: '
-    select opt in "go (Go 1.22+)" "java (OpenJDK 21 + Maven)" "quit"; do
+    PS3=$'\nEnter choice [1-6]: '
+    select opt in "go (Go 1.22+)" "java (OpenJDK 21 + Maven)" "node (Node.js + npm)" "python (Python 3 + pip)" "universal (all runtimes)" "quit"; do
         case "$opt" in
             "go (Go 1.22+)")
                 LANGUAGE="go"
@@ -85,12 +86,24 @@ if [[ -z "$LANGUAGE" ]]; then
                 LANGUAGE="java"
                 break
                 ;;
+            "node (Node.js + npm)")
+                LANGUAGE="node"
+                break
+                ;;
+            "python (Python 3 + pip)")
+                LANGUAGE="python"
+                break
+                ;;
+            "universal (all runtimes)")
+                LANGUAGE="universal"
+                break
+                ;;
             quit)
                 echo "Aborted."
                 exit 0
                 ;;
             *)
-                echo "Please choose 1, 2, or 3."
+                echo "Please choose 1-6."
                 ;;
         esac
     done
@@ -98,8 +111,8 @@ fi
 
 # Validate language
 case "$LANGUAGE" in
-    go|java) ;;
-    *) die "Unsupported language: '$LANGUAGE'. Supported: go, java" ;;
+    go|java|node|python|universal) ;;
+    *) die "Unsupported language: '$LANGUAGE'. Supported: go, java, node, python, universal" ;;
 esac
 
 OUTPUT="${OUTPUT:-rootfs/${LANGUAGE}.ext4}"
@@ -163,33 +176,28 @@ chroot "$MOUNT_DIR" apk add --no-progress \
 
 # ─── install language-specific packages ──────────────────────────────────────
 case "$LANGUAGE" in
-    go)
+    go|universal)
         echo "🐹  Installing Go runtime..."
         chroot "$MOUNT_DIR" apk add --no-progress go
-        # Verify installation inside chroot
         chroot "$MOUNT_DIR" go version
-        # Pre-create GOPATH directories
         mkdir -p "$MOUNT_DIR/root/go/src" \
                  "$MOUNT_DIR/root/go/pkg" \
                  "$MOUNT_DIR/root/go/bin"
-        # Set GOPATH in the default shell profile
         cat >> "$MOUNT_DIR/etc/profile" << 'GOENV'
 
 # Go environment
 export GOPATH=/root/go
 export PATH="$PATH:/usr/local/go/bin:$GOPATH/bin"
 GOENV
-        ;;
-    java)
+        ;;&  # fall through to next match
+    java|universal)
         echo "☕  Installing OpenJDK 21 and Maven..."
         chroot "$MOUNT_DIR" apk add --no-progress \
             openjdk21-jre \
             openjdk21-jdk \
             maven
-        # Verify installation inside chroot
         chroot "$MOUNT_DIR" java -version
         chroot "$MOUNT_DIR" mvn  --version
-        # Set JAVA_HOME in the default shell profile
         JAVA_HOME_PATH="$(chroot "$MOUNT_DIR" sh -c 'readlink -f /usr/bin/java | sed "s|/bin/java||"')"
         cat >> "$MOUNT_DIR/etc/profile" << JAVAENV
 
@@ -197,6 +205,26 @@ GOENV
 export JAVA_HOME=${JAVA_HOME_PATH}
 export PATH="\$PATH:\$JAVA_HOME/bin"
 JAVAENV
+        ;;&  # fall through to next match
+    node|universal)
+        echo "🟢  Installing Node.js runtime..."
+        chroot "$MOUNT_DIR" apk add --no-progress nodejs npm
+        chroot "$MOUNT_DIR" node --version
+        chroot "$MOUNT_DIR" npm --version
+        cat >> "$MOUNT_DIR/etc/profile" << 'NODEENV'
+
+# Node.js environment
+export PATH="$PATH:/usr/local/bin"
+NODEENV
+        ;;&  # fall through to next match
+    python|universal)
+        echo "🐍  Installing Python runtime..."
+        chroot "$MOUNT_DIR" apk add --no-progress \
+            python3 \
+            py3-pip \
+            py3-virtualenv
+        chroot "$MOUNT_DIR" python3 --version
+        chroot "$MOUNT_DIR" pip3 --version
         ;;
 esac
 

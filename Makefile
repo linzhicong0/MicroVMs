@@ -1,4 +1,4 @@
-.PHONY: all build build-api build-agent test clean demo
+.PHONY: all build build-api build-agent test clean demo start-poc
 
 all: build
 
@@ -47,3 +47,18 @@ rootfs-go:
 
 rootfs-java:
 	sudo ./rootfs/generate-rootfs.sh --language java
+
+rootfs-node:
+	sudo ./rootfs/generate-rootfs.sh --language node
+
+rootfs-python:
+	sudo ./rootfs/generate-rootfs.sh --language python
+
+rootfs-universal:
+	sudo ./rootfs/generate-rootfs.sh --language universal
+
+# One-click POC startup (downloads kernel + firecracker, builds, generates rootfs, starts API)
+# Requires: Linux + KVM, Go 1.22+, root
+# Usage: sudo make start-poc LANGUAGE=node
+start-poc:
+	sudo ./scripts/start-poc.sh --language $(or $(LANGUAGE),go)
