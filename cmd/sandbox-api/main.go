@@ -18,11 +18,12 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"crypto/rand"
+	"encoding/hex"
 	"sync"
 	"syscall"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/linzhicong0/MicroVMs/pkg/firecracker"
 	"github.com/linzhicong0/MicroVMs/pkg/network"
 	"github.com/linzhicong0/MicroVMs/pkg/snapshot"
@@ -220,7 +221,7 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Allocate network
-	sandboxID := uuid.New().String()[:8]
+	sandboxID := generateID(8)
 	tap, err := s.netManager.AllocateTAP(sandboxID)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "allocate network: %v", err)
@@ -750,6 +751,16 @@ func httpError(w http.ResponseWriter, status int, format string, args ...interfa
 	json.NewEncoder(w).Encode(map[string]string{
 		"error": fmt.Sprintf(format, args...),
 	})
+}
+
+// generateID returns a random hex string of the given length.
+func generateID(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to timestamp-based ID if crypto/rand fails.
+		return fmt.Sprintf("%x", time.Now().UnixNano())[:n]
+	}
+	return hex.EncodeToString(b)[:n]
 }
 
 func dirOf(path string) string {

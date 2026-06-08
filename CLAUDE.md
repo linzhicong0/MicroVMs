@@ -79,5 +79,5 @@ Key packages:
 ## Dependencies
 
 - Go 1.22, module `github.com/linzhicong0/MicroVMs`
-- Only external dependency: `github.com/google/uuid`
+- No external Go dependencies (stdlib only)
 - TypeScript client has no runtime dependencies (uses native `fetch`)
