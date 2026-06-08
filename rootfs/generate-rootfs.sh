@@ -24,7 +24,7 @@ LANGUAGE=""
 OUTPUT=""
 SIZE_MB="${SIZE_MB:-2048}"
 ALPINE_VER="${ALPINE_VER:-3.20}"
-ARCH="${ARCH:-x86_64}"
+ARCH="${ARCH:-$(uname -m)}"
 ALPINE_MIRROR="https://dl-cdn.alpinelinux.org/alpine"
 
 # ─── helpers ─────────────────────────────────────────────────────────────────
