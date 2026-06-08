@@ -22,9 +22,13 @@ Run a single test:
 go test ./cmd/sandbox-api/ -run TestCreateAndExec -v
 ```
 
-Run with KVM (requires root, Linux host with KVM):
+One-click POC startup (downloads firecracker + kernel, builds, generates rootfs, starts API):
 ```bash
-sudo -E ./bin/sandbox-api  # Needs FIRECRACKER_BIN, KERNEL_IMAGE, ROOTFS_IMAGE env vars
+sudo ./scripts/start-poc.sh                          # Interactive language prompt
+sudo ./scripts/start-poc.sh --language go             # Specific language
+sudo ./scripts/start-poc.sh --language universal      # All runtimes in one rootfs
+sudo ./scripts/start-poc.sh --language go --skip-network
+sudo make start-poc LANGUAGE=node                     # Via Make
 ```
 
 Docker demo (no KVM needed):
@@ -32,11 +36,11 @@ Docker demo (no KVM needed):
 cd demo && docker-compose up --build
 ```
 
-Generate rootfs images:
+Generate rootfs images (requires Linux + root, architecture auto-detected via `uname -m`):
 ```bash
-make rootfs-go       # Non-interactive: sudo ./rootfs/generate-rootfs.sh --language go
-make rootfs-java     # Non-interactive: sudo ./rootfs/generate-rootfs.sh --language java
-make generate-rootfs # Interactive prompt
+make generate-rootfs  # Interactive prompt
+make rootfs-go        # Non-interactive shortcuts:
+make rootfs-java      #   also: rootfs-node, rootfs-python, rootfs-universal
 ```
 
 ## Architecture
@@ -81,3 +85,9 @@ Key packages:
 - Go 1.22, module `github.com/linzhicong0/MicroVMs`
 - No external Go dependencies (stdlib only)
 - TypeScript client has no runtime dependencies (uses native `fetch`)
+
+## Platform Notes
+
+- Firecracker + rootfs generation requires **Linux with KVM** (`/dev/kvm`). Cannot run on macOS.
+- `rootfs/generate-rootfs.sh` auto-detects architecture via `uname -m` (supports `x86_64` and `aarch64`).
+- On macOS, use `make build && ./bin/sandbox-api` for simulation mode, or `docker-compose up` for container-based demo.
