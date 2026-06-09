@@ -136,37 +136,29 @@ echo ""
 
 # ─── Test ────────────────────────────────────────────────────────────────────────
 echo "7️⃣  Testing services..."
+sleep 2
+echo ""
+
+# Test from inside the VMs using exec API (avoids host routing issues)
+echo "   → Python service /health:"
+PY_HEALTH=$(curl -sf -X POST "$API_URL/sandboxes/$PY_ID/exec" \
+    -H "Content-Type: application/json" \
+    -d '{"cmd":"curl -sf http://localhost:8080/health","cwd":"/workspace"}')
+echo "     $PY_HEALTH"
 echo ""
 
 echo "   → Go service /health:"
-if [[ -n "$GO_IP" ]]; then
-    curl -sf "http://$GO_IP:8080/health" 2>/dev/null | sed 's/^/     /' || echo "     (unreachable)"
-else
-    echo "     (simulation mode — use sandbox exec)"
-    curl -sf -X POST "$API_URL/sandboxes/$GO_ID/exec" \
-        -H "Content-Type: application/json" \
-        -d '{"cmd":"curl -sf http://localhost:8080/health","cwd":"/workspace"}' 2>/dev/null | sed 's/^/     /' || echo "     (simulated)"
-fi
+GO_HEALTH=$(curl -sf -X POST "$API_URL/sandboxes/$GO_ID/exec" \
+    -H "Content-Type: application/json" \
+    -d '{"cmd":"curl -sf http://localhost:8080/health","cwd":"/workspace"}')
+echo "     $GO_HEALTH"
 echo ""
 
-echo "   → Python service /health:"
-if [[ -n "$PY_IP" ]]; then
-    curl -sf "http://$PY_IP:8080/health" 2>/dev/null | sed 's/^/     /' || echo "     (unreachable)"
-else
-    curl -sf -X POST "$API_URL/sandboxes/$PY_ID/exec" \
-        -H "Content-Type: application/json" \
-        -d '{"cmd":"curl -sf http://localhost:8080/health","cwd":"/workspace"}' 2>/dev/null | sed 's/^/     /' || echo "     (simulated)"
-fi
-echo ""
-
-echo "   → Go service /call-python (cross-VM call):"
-if [[ -n "$GO_IP" ]]; then
-    curl -sf "http://$GO_IP:8080/call-python" 2>/dev/null | sed 's/^/     /' || echo "     (unreachable)"
-else
-    curl -sf -X POST "$API_URL/sandboxes/$GO_ID/exec" \
-        -H "Content-Type: application/json" \
-        -d '{"cmd":"curl -sf http://localhost:8080/call-python","cwd":"/workspace"}' 2>/dev/null | sed 's/^/     /' || echo "     (simulated)"
-fi
+echo "   → Go service /call-python (cross-VM call to $PY_IP):"
+CROSS=$(curl -sf -X POST "$API_URL/sandboxes/$GO_ID/exec" \
+    -H "Content-Type: application/json" \
+    -d "{\"cmd\":\"curl -sf http://$PY_IP:8080/\",\"cwd\":\"/workspace\"}")
+echo "     $CROSS"
 echo ""
 
 # ─── Cleanup ────────────────────────────────────────────────────────────────────
