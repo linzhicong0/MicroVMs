@@ -89,19 +89,36 @@ case "$ARCH" in
 esac
 
 cd "$BASE_DIR/examples/go-service"
-GOOS=linux GOARCH=$GOARCH go build -o /tmp/go-service .
+CGO_ENABLED=0 GOOS=linux GOARCH=$GOARCH go build -o /tmp/go-service .
 echo "   Built: go-service (linux/$GOARCH)"
 echo ""
 
 # ─── Deploy Go service ─────────────────────────────────────────────────────────
 echo "6️⃣  Deploying Go service..."
 
-# Read binary and base64-encode it, then decode and write inside the VM
-B64=$(base64 < /tmp/go-service)
+# Serve the binary via a temp HTTP server so the VM can download it
+# (avoids ARG_MAX limit from passing base64 on the command line)
+cp /tmp/go-service /tmp/go-service-download
+cd /tmp
+python3 -m http.server 9999 --bind 0.0.0.0 >/dev/null 2>&1 &
+FILE_SERVER_PID=$!
+sleep 1
+
+# In KVM mode, VMs reach the host via the bridge gateway (10.0.0.1)
+# In simulation mode, use localhost
+if [[ -n "$GO_IP" ]]; then
+    FILE_URL="http://10.0.0.1:9999/go-service-download"
+else
+    FILE_URL="http://localhost:9999/go-service-download"
+fi
+
 curl -sf -X POST "$API_URL/sandboxes/$GO_ID/exec" \
     -H "Content-Type: application/json" \
-    -d "{\"cmd\":\"echo $B64 | base64 -d > /workspace/go-service && chmod +x /workspace/go-service\",\"cwd\":\"/workspace\"}" > /dev/null
-echo "   Written: /workspace/go-service"
+    -d "{\"cmd\":\"curl -sf $FILE_URL -o /workspace/go-service && chmod +x /workspace/go-service\",\"cwd\":\"/workspace\"}" > /dev/null
+
+kill $FILE_SERVER_PID 2>/dev/null || true
+rm -f /tmp/go-service-download
+echo "   Downloaded & written: /workspace/go-service"
 
 # Build the python URL based on mode
 if [[ -n "$PY_IP" ]]; then
