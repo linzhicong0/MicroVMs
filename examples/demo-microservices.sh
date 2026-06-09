@@ -140,25 +140,18 @@ sleep 2
 echo ""
 
 # Test from inside the VMs using exec API (avoids host routing issues)
-echo "   → Python service /health:"
-PY_HEALTH=$(curl -sf -X POST "$API_URL/sandboxes/$PY_ID/exec" \
+echo "   → Python service /hello:"
+PY_HELLO=$(curl -sf -X POST "$API_URL/sandboxes/$PY_ID/exec" \
     -H "Content-Type: application/json" \
-    -d '{"cmd":"curl -sf http://localhost:8080/health","cwd":"/workspace"}')
-echo "     $PY_HEALTH"
+    -d '{"cmd":"curl -sf http://localhost:8080/hello","cwd":"/workspace"}')
+echo "     $PY_HELLO"
 echo ""
 
-echo "   → Go service /health:"
-GO_HEALTH=$(curl -sf -X POST "$API_URL/sandboxes/$GO_ID/exec" \
+echo "   → Go service /greeting (calls Python /hello across VMs):"
+GREETING=$(curl -sf -X POST "$API_URL/sandboxes/$GO_ID/exec" \
     -H "Content-Type: application/json" \
-    -d '{"cmd":"curl -sf http://localhost:8080/health","cwd":"/workspace"}')
-echo "     $GO_HEALTH"
-echo ""
-
-echo "   → Go service /call-python (cross-VM call to $PY_IP):"
-CROSS=$(curl -sf -X POST "$API_URL/sandboxes/$GO_ID/exec" \
-    -H "Content-Type: application/json" \
-    -d "{\"cmd\":\"curl -sf http://$PY_IP:8080/\",\"cwd\":\"/workspace\"}")
-echo "     $CROSS"
+    -d "{\"cmd\":\"curl -sf http://localhost:8080/greeting\",\"cwd\":\"/workspace\"}")
+echo "     $GREETING"
 echo ""
 
 # ─── Cleanup ────────────────────────────────────────────────────────────────────

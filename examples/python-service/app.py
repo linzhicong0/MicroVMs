@@ -9,6 +9,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             self._json(200, {"status": "healthy"})
+        elif self.path == "/hello":
+            self._json(200, {"message": "hello world"})
         else:
             self._json(200, {
                 "service": "python",
