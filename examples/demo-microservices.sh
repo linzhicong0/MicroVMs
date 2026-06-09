@@ -15,6 +15,16 @@ set -euo pipefail
 
 API_URL="${API_URL:-http://localhost:8080}"
 BASE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+NO_CLEANUP=false
+
+# ─── Argument Parsing ──────────────────────────────────────────────────────────
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --no-cleanup) NO_CLEANUP=true; shift ;;
+        --help|-h) sed -n '2,/^$/p' "$0" | grep '^#' | sed 's/^# \?//'; exit 0 ;;
+        *) echo "Unknown option: $1"; exit 1 ;;
+    esac
+done
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
@@ -155,12 +165,32 @@ echo "     $GREETING"
 echo ""
 
 # ─── Cleanup ────────────────────────────────────────────────────────────────────
-echo "8️⃣  Cleaning up..."
-curl -sf -X DELETE "$API_URL/sandboxes/$GO_ID" > /dev/null
-curl -sf -X DELETE "$API_URL/sandboxes/$PY_ID" > /dev/null
-echo "   Sandboxes stopped"
-echo ""
+if $NO_CLEANUP; then
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║  ✅ Services running — VMs kept alive (--no-cleanup)       ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "   Python sandbox: $PY_ID  (${PY_IP:-localhost})"
+    echo "   Go sandbox:     $GO_ID  (${GO_IP:-localhost})"
+    echo ""
+    echo "   Test the Go service (calls Python /hello across VMs):"
+    echo "     curl -s -X POST $API_URL/sandboxes/$GO_ID/exec \\"
+    echo "       -H 'Content-Type: application/json' \\"
+    echo "       -d '{\"cmd\":\"curl -sf http://localhost:8080/greeting\"}'"
+    echo ""
+    echo "   Stop sandboxes:"
+    echo "     curl -X DELETE $API_URL/sandboxes/$GO_ID"
+    echo "     curl -X DELETE $API_URL/sandboxes/$PY_ID"
+    echo ""
+else
+    echo "8️⃣  Cleaning up..."
+    curl -sf -X DELETE "$API_URL/sandboxes/$GO_ID" > /dev/null
+    curl -sf -X DELETE "$API_URL/sandboxes/$PY_ID" > /dev/null
+    echo "   Sandboxes stopped"
+    echo ""
 
-echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  ✅ Microservice POC complete                               ║"
-echo "╚══════════════════════════════════════════════════════════════╝"
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║  ✅ Microservice POC complete                               ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+fi
